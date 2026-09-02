@@ -1,0 +1,8 @@
+data/*
+# keyless FIRMS serves only the last 24 h, so this one cannot be re-fetched
+!data/fires.csv
+figs/
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
