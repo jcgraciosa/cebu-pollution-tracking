@@ -101,8 +101,22 @@ VARS = {
         mask_below=101),
 }
 
+FIG_DPI = 160            # frames render at this; GIFs are resampled down from it
+
+# Credit line, upper left inside the map frame. Set to None to drop it.
+WATERMARK = "Made by: Juan Carlos Graciosa, PhD"
+WATERMARK_SUB = None      # e.g. an affiliation or handle on a second line
+# position inside the map axes; (0.015, 0.977)+"left" sits over Vietnam,
+# (0.985, 0.977)+"right" sits over the Philippine Sea
+WATERMARK_XY, WATERMARK_HA = (0.015, 0.977), "left"
+WATERMARK_SIZE = 7.5
+
+COAST, BORDER = "#44403c", "#57534e"     # map outlines
+HALO = "#f5f5f4"                          # light backing so they read on imagery
+
 INK, INK_MUTED, SURFACE = "#1c1917", "#78716c", "#ffffff"
 FIRE, TRAJ, RECEPTOR = "#dc2626", "#0f172a", "#0f172a"
+FIRE_ALPHA = 0.55         # fires draw over the raster; keep them from dominating
 
 
 def attribution(year: int | None = None, basemap: bool = False) -> list[str]:

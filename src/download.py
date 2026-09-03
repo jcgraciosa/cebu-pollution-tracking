@@ -139,6 +139,8 @@ def main() -> None:
     p.add_argument("--step", type=float, default=C.GRID_STEP)
     p.add_argument("--past-days", type=int, default=C.PAST_DAYS)
     p.add_argument("--forecast-days", type=int, default=C.FORECAST_DAYS)
+    p.add_argument("--replace-fires", action="store_true",
+                   help="overwrite the fire archive instead of appending to it")
     p.add_argument("--parts", default=",".join(STAGES),
                    help=f"stages to run, comma separated: {','.join(STAGES)}")
     a = p.parse_args()
@@ -201,8 +203,21 @@ def main() -> None:
     if "fires" in parts:
         print("VIIRS active fire (FIRMS)...", file=sys.stderr)
         fires = fetch_fires(a.past_days)
-        fires.to_csv(C.DATA / "fires.csv", index=False)
-        print(f"  kept {len(fires)} detections in the domain", file=sys.stderr)
+        out = C.DATA / "fires.csv"
+        if out.exists() and not a.replace_fires:
+            # keyless FIRMS only ever serves the last 24 h, so accumulate:
+            # overwriting would permanently discard earlier days
+            old = pd.read_csv(out, parse_dates=["when"])
+            before = len(old)
+            fires = (pd.concat([old, fires], ignore_index=True)
+                       .drop_duplicates(subset=["latitude", "longitude",
+                                                "acq_date", "acq_time", "source"])
+                       .sort_values("when").reset_index(drop=True))
+            print(f"  archive {before} + new -> {len(fires)} "
+                  f"({len(fires)-before} added)", file=sys.stderr)
+        fires.to_csv(out, index=False)
+        span = f"{fires.when.min():%Y-%m-%d} .. {fires.when.max():%Y-%m-%d}"
+        print(f"  {len(fires)} detections in the domain, {span}", file=sys.stderr)
 
     (C.DATA / "meta.json").write_text(json.dumps(dict(
         bbox=C.BBOX, step=a.step, past_days=a.past_days,

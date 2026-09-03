@@ -13,10 +13,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 import config as C
 
 
-def build_gif(frames, out, fps, scale):
+def build_gif(frames, out, fps, scale, width=None):
     imgs = []
     for f in frames:
         im = Image.open(f).convert("RGB")
+        if width:
+            scale = width / im.width
         if scale != 1.0:
             im = im.resize((int(im.width * scale), int(im.height * scale)), Image.LANCZOS)
         # quantise per frame so the palette follows the plume, not frame 1
@@ -51,7 +53,10 @@ def main() -> None:
     p.add_argument("--local", action="store_true")
     p.add_argument("--basemap", action="store_true")
     p.add_argument("--fps", type=float, default=2, help="frames per second")
-    p.add_argument("--scale", type=float, default=0.7, help="GIF downscale factor")
+    p.add_argument("--width", type=int, default=900,
+                   help="GIF pixel width; independent of the render DPI")
+    p.add_argument("--scale", type=float, default=None,
+                   help="downscale factor, used only if --width is 0")
     p.add_argument("--every", type=int, default=1,
                    help="keep every Nth frame (for a small README loop)")
     p.add_argument("--out", default=None, help="output stem")
@@ -63,7 +68,8 @@ def main() -> None:
         sys.exit(f"no frames in {C.FRAMES / name} -- run plot_maps.py first")
 
     stem = a.out or name
-    gif = build_gif(frames, C.FIGS / f"{stem}.gif", a.fps, a.scale)
+    gif = build_gif(frames, C.FIGS / f"{stem}.gif", a.fps,
+                    a.scale or 1.0, a.width or None)
     print(f"{len(frames)} frames -> {gif}  ({gif.stat().st_size/1e6:.1f} MB)",
           file=sys.stderr)
     if mp4 := build_mp4(frames, C.FIGS / f"{stem}.mp4", a.fps):
