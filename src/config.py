@@ -12,6 +12,7 @@ for _d in (DATA, FIGS, FRAMES):
     _d.mkdir(parents=True, exist_ok=True)
 
 CEBU = dict(name="Cebu City", lat=10.32, lon=123.90)
+TZ_OFFSET_H, TZ_LABEL = 8, "PHT"     # Philippines is UTC+8 all year, no DST
 BBOX = dict(south=-6.0, north=16.0, west=104.0, east=129.0)
 BBOX_LOCAL = dict(south=7.0, north=13.5, west=120.5, east=127.0)
 

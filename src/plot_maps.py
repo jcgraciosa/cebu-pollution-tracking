@@ -199,9 +199,12 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
 
     # figure-level, not ax.set_title: cartopy shrinks the GeoAxes to the map
     # aspect and an axes title can end up clipped above the visible frame
-    fig.text(0.06, 0.963, f"{spec['short']} · {tstamp:%Y-%m-%d %H:%M} UTC",
+    # local time leads: the audience for these is in the Philippines
+    local = tstamp + pd.Timedelta(hours=C.TZ_OFFSET_H)
+    fig.text(0.06, 0.963,
+             f"{spec['short']} · {local:%a %d %b %Y, %H:%M} {C.TZ_LABEL}",
              fontsize=13.5, color=C.INK, weight="bold", va="top")
-    fig.text(0.06, 0.931, f"{tstamp + pd.Timedelta(hours=8):%a %d %b %H:%M} Philippine time",
+    fig.text(0.06, 0.931, f"{tstamp:%Y-%m-%d %H:%M} UTC",
              fontsize=9.5, color=C.INK_MUTED, va="top")
     if C.WATERMARK:
         # inside the map frame, boxed so it stays legible over imagery
