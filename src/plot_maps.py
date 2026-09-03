@@ -48,19 +48,28 @@ def fetch_gibs(date, bbox):
         return None
 
 
-def _coastline(ax):
-    """Natural Earth 50m if cartopy can fetch it, else the bundled 110m."""
+def _boundaries(ax, over_imagery=False):
+    """Coastlines and national borders. Over imagery they get a light halo so
+    they stay legible against both dark ocean and bright smoke."""
     for res in ("50m", "110m"):
         try:
-            ax.add_feature(cfeature.LAND.with_scale(res), facecolor="#f5f5f4", zorder=0)
-            ax.add_feature(cfeature.OCEAN.with_scale(res), facecolor="#eef2f5", zorder=0)
+            if not over_imagery:
+                ax.add_feature(cfeature.LAND.with_scale(res),
+                               facecolor="#f5f5f4", zorder=0)
+                ax.add_feature(cfeature.OCEAN.with_scale(res),
+                               facecolor="#eef2f5", zorder=0)
+            else:
+                ax.add_feature(cfeature.COASTLINE.with_scale(res), edgecolor=C.HALO,
+                               linewidth=1.9, alpha=0.55, zorder=5)
+                ax.add_feature(cfeature.BORDERS.with_scale(res), edgecolor=C.HALO,
+                               linewidth=1.6, alpha=0.5, zorder=5)
             ax.add_feature(cfeature.COASTLINE.with_scale(res),
-                           edgecolor="#a8a29e", linewidth=0.5, zorder=5)
-            ax.add_feature(cfeature.BORDERS.with_scale(res),
-                           edgecolor="#d6d3d1", linewidth=0.4, zorder=5)
+                           edgecolor=C.COAST, linewidth=0.8, zorder=5.1)
+            ax.add_feature(cfeature.BORDERS.with_scale(res), edgecolor=C.BORDER,
+                           linewidth=0.7, linestyle="--", zorder=5.1)
             return
         except Exception as e:                              # noqa: BLE001
-            print(f"  coastline {res} unavailable ({e!r})", file=sys.stderr)
+            print(f"  boundaries {res} unavailable ({e!r})", file=sys.stderr)
 
 
 def pick_cube(aq, met, var):
@@ -92,7 +101,7 @@ def _scaled(values, spec):
 
 def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
                fire_window_h=12, quiver_every=2, show_forecast=False,
-               basemap=False):
+               basemap=False, dpi=None):
     times = aq["time"]
     tstamp = pd.Timestamp(str(times[k]))
     src = pick_cube(aq, met, var)
@@ -104,7 +113,7 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
         if spec.get("mask_above") is not None:
             field = np.where(field > spec["mask_above"], np.nan, field)
 
-    fig = plt.figure(figsize=(10.5, 8.6), dpi=110)
+    fig = plt.figure(figsize=(10.5, 8.6), dpi=dpi or C.FIG_DPI)
     gs = fig.add_gridspec(2, 1, height_ratios=[4.0, 1.0], hspace=0.16,
                           left=0.06, right=0.93, top=0.905, bottom=0.15)
     ax = fig.add_subplot(gs[0], projection=PC)
@@ -114,10 +123,7 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
     img = fetch_gibs(f"{tstamp:%Y-%m-%d}", bbox) if basemap else None
     if img is not None:
         ax.imshow(plt.imread(img), origin="upper", transform=PC, zorder=0, extent=extent)
-        ax.add_feature(cfeature.COASTLINE.with_scale("50m"),
-                       edgecolor="#fafaf9", linewidth=0.45, alpha=0.65, zorder=5)
-    else:
-        _coastline(ax)
+    _boundaries(ax, over_imagery=img is not None)
 
     if spec.get("bands"):
         cmap = ListedColormap(spec["band_colors"])
@@ -150,9 +156,11 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
             w = fires[fires.when.between(lo_, hi_)]
             flabel = f"VIIRS fire ±{fire_window_h} h (n={len(w)})"
         if len(w):
+            # deliberately ON TOP of the raster: the fires are the source being
+            # attributed, so they must stay legible through the plume
             ax.scatter(w.longitude, w.latitude, s=np.clip(w.frp * 0.28, 1.5, 42),
-                       c=C.FIRE, alpha=0.55, linewidths=0, transform=PC, zorder=6,
-                       label=flabel)
+                       c=C.FIRE, alpha=C.FIRE_ALPHA, linewidths=0, transform=PC,
+                       zorder=6, label=flabel)
 
     if draw_traj:
         _, tla, tlo = back_trajectory(met, C.CEBU["lat"], C.CEBU["lon"], mi, hours=120)
@@ -184,9 +192,10 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
         cb.set_ticklabels(spec["band_names"])
         cb.ax.tick_params(labelsize=7, length=0)
 
-    ax.legend(loc="lower left", fontsize=8, framealpha=0.92,
-              facecolor="white", edgecolor="#e7e5e4",
-              borderpad=0.6).get_frame().set_linewidth(0.6)
+    leg = ax.legend(loc="lower right", fontsize=8, framealpha=1.0,
+                    facecolor="white", edgecolor="#a8a29e", borderpad=0.7)
+    leg.set_zorder(20)                     # clear of the field and the imagery
+    leg.get_frame().set_linewidth(0.8)
 
     # figure-level, not ax.set_title: cartopy shrinks the GeoAxes to the map
     # aspect and an axes title can end up clipped above the visible frame
@@ -194,6 +203,15 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
              fontsize=13.5, color=C.INK, weight="bold", va="top")
     fig.text(0.06, 0.931, f"{tstamp + pd.Timedelta(hours=8):%a %d %b %H:%M} Philippine time",
              fontsize=9.5, color=C.INK_MUTED, va="top")
+    if C.WATERMARK:
+        # inside the map frame, boxed so it stays legible over imagery
+        credit = C.WATERMARK + (f"\n{C.WATERMARK_SUB}" if C.WATERMARK_SUB else "")
+        ax.text(*C.WATERMARK_XY, credit, transform=ax.transAxes,
+                ha=C.WATERMARK_HA, va="top",
+                fontsize=C.WATERMARK_SIZE, color=C.INK, zorder=20,
+                linespacing=1.5,
+                bbox=dict(boxstyle="round,pad=0.38", facecolor="white",
+                          edgecolor="#a8a29e", linewidth=0.8, alpha=0.5))
 
     # --- receptor strip -------------------------------------------------------
     axb = fig.add_subplot(gs[1])
@@ -258,6 +276,7 @@ def main() -> None:
                    help="NASA GIBS true-colour imagery under the field")
     p.add_argument("--no-trajectory", action="store_true")
     p.add_argument("--vmax", type=float, default=None)
+    p.add_argument("--dpi", type=int, default=C.FIG_DPI)
     p.add_argument("--include-forecast", action="store_true",
                    help="also render hours beyond now (off: this is retrospective)")
     a = p.parse_args()
@@ -288,7 +307,8 @@ def main() -> None:
     for n, k in enumerate(idx, 1):
         out = make_frame(k, aq, met, fires, site, a.var, spec, bbox,
                          not a.no_trajectory, outdir,
-                         show_forecast=a.include_forecast, basemap=a.basemap)
+                         show_forecast=a.include_forecast, basemap=a.basemap,
+                         dpi=a.dpi)
         print(f"  [{n:3d}] {out.name}", file=sys.stderr, flush=True)
 
 
