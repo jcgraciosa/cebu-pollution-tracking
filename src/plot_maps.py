@@ -101,7 +101,7 @@ def _scaled(values, spec):
 
 def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
                fire_window_h=12, quiver_every=2, show_forecast=False,
-               basemap=False, dpi=None):
+               basemap=False, dpi=None, t_start=None):
     times = aq["time"]
     tstamp = pd.Timestamp(str(times[k]))
     src = pick_cube(aq, met, var)
@@ -161,12 +161,20 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
             ax.scatter(w.longitude, w.latitude, s=np.clip(w.frp * 0.28, 1.5, 42),
                        c=C.FIRE, alpha=C.FIRE_ALPHA, linewidths=0, transform=PC,
                        zorder=6, label=flabel)
+        else:
+            # the archive does not reach this hour. Say so: an empty map otherwise
+            # reads as "nothing burning" when it means "no observations".
+            ax.scatter([], [], c=C.FIRE, s=18, linewidths=0, transform=PC, zorder=6,
+                       label=f"VIIRS fire · no data before "
+                             f"{fires.when.min():%d %b %H:%M} UTC")
 
     if draw_traj:
         _, tla, tlo = back_trajectory(met, C.CEBU["lat"], C.CEBU["lon"], mi, hours=120)
         ax.plot(tlo, tla, color="#ffffff", lw=3.4, alpha=0.9, transform=PC, zorder=7)
+        # label the length actually integrated: a parcel that leaves the domain
+        # or runs out of record gives a shorter track than requested
         ax.plot(tlo, tla, color=C.TRAJ, lw=1.8, transform=PC, zorder=8,
-                label="850 hPa back-trajectory, 120 h")
+                label=f"850 hPa back-trajectory, {len(tla)-1} h")
         ax.scatter(tlo[::24], tla[::24], s=26, facecolor="#ffffff",
                    edgecolor=C.TRAJ, linewidths=1.4, transform=PC, zorder=9)
 
@@ -222,6 +230,8 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
     st = site.dropna(subset=[var])
     if not show_forecast:
         st = st[st.time <= now]
+    if t_start is not None:                 # match the strip to the frame window
+        st = st[st.time >= t_start]
     series = _scaled(st[var].to_numpy(dtype="float64"), spec)
     axb.plot(st.time, series, color="#78716c", lw=1.6)
     axb.fill_between(st.time, 0, series, color="#78716c", alpha=0.13)
@@ -237,7 +247,8 @@ def make_frame(k, aq, met, fires, site, var, spec, bbox, draw_traj, outdir,
     if show_forecast and len(st):
         axb.axvspan(now, st.time.max(), color="#a8a29e", alpha=0.10)
 
-    obs = [o for o in C.GROUND_OBS if var in o]
+    obs = [o for o in C.GROUND_OBS if var in o
+           and (t_start is None or pd.Timestamp(o["time"]) >= t_start)]
     if obs:
         ot = [pd.Timestamp(o["time"]) for o in obs]
         ov = [o[var] for o in obs]
@@ -280,6 +291,9 @@ def main() -> None:
     p.add_argument("--no-trajectory", action="store_true")
     p.add_argument("--vmax", type=float, default=None)
     p.add_argument("--dpi", type=int, default=C.FIG_DPI)
+    p.add_argument("--start", default=None,
+                   help="first frame, e.g. 2026-08-31 (UTC); default is the "
+                        "start of the downloaded window")
     p.add_argument("--include-forecast", action="store_true",
                    help="also render hours beyond now (off: this is retrospective)")
     a = p.parse_args()
@@ -305,13 +319,23 @@ def main() -> None:
         print(f"analysis window: {aq['time'][0]}Z .. {aq['time'][n_t-1]}Z "
               f"({aq['time'].size - n_t} future hours dropped)", file=sys.stderr)
 
-    idx = list(range(0, n_t, a.stride))
+    i0 = 0
+    if a.start:
+        i0 = int(np.searchsorted(aq["time"].astype("datetime64[ns]"),
+                                 np.datetime64(pd.Timestamp(a.start), "ns"), "left"))
+        if i0 >= n_t:
+            sys.exit(f"--start {a.start} is after the last analysed hour {aq['time'][n_t-1]}Z")
+        print(f"starting at {aq['time'][i0]}Z", file=sys.stderr)
+    idx = list(range(i0, n_t, a.stride))
+    if idx[-1] != n_t - 1:
+        idx.append(n_t - 1)      # always end on the newest analysed hour
+    t_start = pd.Timestamp(str(aq["time"][idx[0]]))
     print(f"{len(idx)} frames -> {outdir}", file=sys.stderr)
     for n, k in enumerate(idx, 1):
         out = make_frame(k, aq, met, fires, site, a.var, spec, bbox,
                          not a.no_trajectory, outdir,
                          show_forecast=a.include_forecast, basemap=a.basemap,
-                         dpi=a.dpi)
+                         dpi=a.dpi, t_start=t_start)
         print(f"  [{n:3d}] {out.name}", file=sys.stderr, flush=True)
 
 
