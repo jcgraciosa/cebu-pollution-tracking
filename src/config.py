@@ -18,7 +18,7 @@ BBOX_LOCAL = dict(south=7.0, north=13.5, west=120.5, east=127.0)
 
 GRID_STEP = 1.0          # CAMS global is ~0.4 deg, so 1.0 subsamples it
 CHUNK = 25               # coordinates per Open-Meteo request
-PAST_DAYS = 5
+PAST_DAYS = 10           # >5 so a 120 h back-trajectory completes on the first frame
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock
 
 # --- sources -----------------------------------------------------------------

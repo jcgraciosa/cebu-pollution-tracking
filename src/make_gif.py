@@ -6,24 +6,43 @@
 """
 from __future__ import annotations
 import argparse, os, shutil, subprocess, sys
-import imageio.v2 as imageio
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
 
 
-def build_gif(frames, out, fps, scale, width=None):
-    imgs = []
+def build_gif(frames, out, fps, scale, width=None, hold_last=1.5):
+    """Write the GIF, holding the final frame so the current hour is readable.
+
+    Durations are per-frame MILLISECONDS. Passing seconds here silently writes
+    duration=0 and the GIF then plays as fast as the viewer allows.
+    """
+    rgb = []
     for f in frames:
         im = Image.open(f).convert("RGB")
         if width:
             scale = width / im.width
         if scale != 1.0:
             im = im.resize((int(im.width * scale), int(im.height * scale)), Image.LANCZOS)
-        # quantise per frame so the palette follows the plume, not frame 1
-        imgs.append(im.quantize(colors=192, method=Image.MEDIANCUT).convert("RGB"))
-    imageio.mimsave(out, imgs, duration=1.0 / fps, loop=0, subrectangles=True)
+        rgb.append(im)
+
+    # ONE palette for the whole sequence. Quantising per frame lets the same
+    # value land on slightly different RGB each frame, which reads as flicker.
+    w, h = rgb[0].size
+    tile = max(1, len(rgb) // 24)
+    sample = rgb[::tile]
+    strip = Image.new("RGB", (w // 3, (h // 3) * len(sample)))
+    for i, im in enumerate(sample):
+        strip.paste(im.resize((w // 3, h // 3), Image.LANCZOS), (0, i * (h // 3)))
+    master = strip.quantize(colors=256, method=Image.MEDIANCUT)
+    imgs = [im.quantize(palette=master, dither=Image.Dither.NONE) for im in rgb]
+    per = [max(20, round(1000 / fps))] * len(imgs)
+    per[-1] = max(per[-1], round(hold_last * 1000))
+    # optimize=True lets PIL rebuild per-frame palettes, which reintroduces
+    # the flicker the shared palette exists to prevent
+    imgs[0].save(out, save_all=True, append_images=imgs[1:], duration=per,
+                 loop=0, optimize=False, disposal=2)
     return out
 
 
@@ -52,7 +71,9 @@ def main() -> None:
     p.add_argument("--var", default="aerosol_optical_depth", choices=list(C.VARS))
     p.add_argument("--local", action="store_true")
     p.add_argument("--basemap", action="store_true")
-    p.add_argument("--fps", type=float, default=2, help="frames per second")
+    p.add_argument("--fps", type=float, default=4, help="frames per second")
+    p.add_argument("--hold", type=float, default=1.0,
+                   help="seconds to hold the final (current) frame")
     p.add_argument("--width", type=int, default=900,
                    help="GIF pixel width; independent of the render DPI")
     p.add_argument("--scale", type=float, default=None,
@@ -69,7 +90,7 @@ def main() -> None:
 
     stem = a.out or name
     gif = build_gif(frames, C.FIGS / f"{stem}.gif", a.fps,
-                    a.scale or 1.0, a.width or None)
+                    a.scale or 1.0, a.width or None, hold_last=a.hold)
     print(f"{len(frames)} frames -> {gif}  ({gif.stat().st_size/1e6:.1f} MB)",
           file=sys.stderr)
     if mp4 := build_mp4(frames, C.FIGS / f"{stem}.mp4", a.fps):
