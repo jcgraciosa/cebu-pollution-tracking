@@ -17,7 +17,9 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
 
-STATION = C.DATA / "aqi-data-1.xlsx"
+# every aqi-data-*.xlsx drop, newest wins on a repeated hour: the station file
+# arrives by hand as a growing export, so a new one supersedes the last
+STATION = sorted(C.DATA.glob("aqi-data-*.xlsx"))
 
 SPECIES = {
     "pm25": dict(obs="PM 2.5", mod="pm2_5", label="PM$_{2.5}$", colour="#b45309"),
@@ -84,7 +86,10 @@ def pm25_to_aqi(c):
 
 
 def load_pairs() -> pd.DataFrame:
-    df = pd.read_excel(STATION)
+    if not STATION:
+        raise SystemExit(f"no aqi-data-*.xlsx in {C.DATA}")
+    df = (pd.concat([pd.read_excel(f) for f in STATION], ignore_index=True)
+            .drop_duplicates(subset=["YEAR", "MONTH", "DATE", "HOUR"], keep="last"))
     df["t_local"] = pd.to_datetime(dict(year=df.YEAR, month=df.MONTH,
                                         day=df.DATE, hour=df.HOUR))
     df["time"] = df.t_local - pd.Timedelta(hours=C.TZ_OFFSET_H)

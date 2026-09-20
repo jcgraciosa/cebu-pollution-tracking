@@ -14,12 +14,16 @@ import config as C
 from make_gif import _ffmpeg
 
 SITE = C.ROOT / "site"
-ANIM = [("aerosol_optical_depth", "Aerosol optical depth",
+# (stem, anchor id, heading, caption) -- ids give each panel a shareable link,
+# which is what figure numbers would be for on a page with no body text
+ANIM = [("aerosol_optical_depth", "aod", "Aerosol optical depth",
          "Column smoke loading, with VIIRS thermal anomalies."),
-        ("carbon_monoxide", "Carbon monoxide",
+        ("carbon_monoxide", "co", "Carbon monoxide",
          "Surface CO at 10 m — the conservative tracer. Persists after aerosol is scavenged."),
 ]
-FIGS = [("cebu_forecast.png", "24 h outlook for Cebu")]
+FIGS = [("cebu_forecast.png", "forecast", "PM2.5 and PM10 · 24 h outlook",
+         "Corrected CAMS against the DENR-EMB station, with a 50% predictive band. "
+         "The shaded floor is the WHO 2021 24-hour guideline.")]
 
 CSS = """*{box-sizing:border-box}
 body{margin:0;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -31,6 +35,8 @@ h1{font-size:1.9rem;margin:0 0 6px;letter-spacing:-.02em}
 .stamp{color:#a8a29e;font-size:.85rem}
 section{margin:44px 0 0}
 h2{font-size:1.15rem;margin:0 0 4px;letter-spacing:-.01em}
+h2 a{color:inherit;text-decoration:none}
+h2 a:hover{text-decoration:underline}
 p.cap{color:#78716c;margin:0 0 14px;font-size:.92rem}
 video,img.fig{width:100%;height:auto;border:1px solid #e7e5e4;border-radius:8px;background:#fff}
 .note{background:#fff;border:1px solid #e7e5e4;border-left:3px solid #b45309;
@@ -67,7 +73,7 @@ def main() -> None:
     stamp = pd.Timestamp.now(tz="UTC") + pd.Timedelta(hours=C.TZ_OFFSET_H)
     body = []
 
-    for stem, title, cap in ANIM:
+    for stem, anchor, title, cap in ANIM:
         mp4 = C.FIGS / f"{stem}.mp4"
         if not mp4.exists():
             print(f"  skip {stem}: no mp4", file=sys.stderr); continue
@@ -79,17 +85,18 @@ def main() -> None:
             extra = f' &middot; <a href="{gif.name}" download>GIF, {gif.stat().st_size/1e6:.1f} MB</a>'
         p = poster(stem)
         pa = f' poster="{p.name}"' if p else ""
-        body.append(f"""<section><h2>{title}</h2>
+        body.append(f"""<section id="{anchor}"><h2><a href="#{anchor}">{title}</a></h2>
 <p class="cap">{cap}{extra}</p>
 <video controls loop muted playsinline preload="none"{pa}>
 <source src="{mp4.name}" type="video/mp4"></video></section>""")
 
-    for fn, title in FIGS:
+    for fn, anchor, title, cap in FIGS:
         src = C.FIGS / fn
         if not src.exists():
             continue
         shutil.copy2(src, SITE / fn)
-        body.append(f"""<section><h2>{title}</h2>
+        body.append(f"""<section id="{anchor}"><h2><a href="#{anchor}">{title}</a></h2>
+<p class="cap">{cap}</p>
 <img class="fig" src="{fn}" alt="{title}" loading="lazy"></section>""")
 
     for md in ("README.md",):
@@ -119,7 +126,8 @@ DWD ICON winds &middot; VIIRS active fire / thermal anomalies: NASA LANCE/FIRMS 
 imagery: NASA Worldview/GIBS &middot; served via Open-Meteo (CC BY 4.0) &middot;
 coastlines: Natural Earth<br>
 Neither the European Commission nor ECMWF is responsible for any use that may be made of the information it contains.<br>
-Made by Juan Carlos Graciosa &middot;
+Juan Carlos Graciosa, Xavier Bacalla, Junelie Velonta, Vhan Sabellano
+&middot;
 <a href="https://github.com/jcgraciosa/cebu-pollution-tracking">source</a>
 </footer></div></body></html>""")
 

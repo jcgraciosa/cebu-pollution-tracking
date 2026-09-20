@@ -13,7 +13,9 @@ for _d in (DATA, FIGS, FRAMES):
 
 CEBU = dict(name="Cebu City", lat=10.32, lon=123.90)
 TZ_OFFSET_H, TZ_LABEL = 8, "PHT"     # Philippines is UTC+8 all year, no DST
-BBOX = dict(south=-6.0, north=21.0, west=104.0, east=130.0)
+# west to Sumatra: the Riau/Jambi fires are a second source region, and the
+# domain now reads wider than tall, which fills the figure better
+BBOX = dict(south=-10.0, north=21.0, west=94.0, east=130.0)
 BBOX_LOCAL = dict(south=7.0, north=13.5, west=120.5, east=127.0)
 
 GRID_STEP = 1.0          # CAMS global is ~0.4 deg, so 1.0 subsamples it
@@ -80,7 +82,14 @@ VARS = {
         vmin=0.0, vmax=150.0, log=False, fmt="{:.0f}", mask_below=25.0),
     "carbon_monoxide": dict(
         label="Carbon monoxide (µg m$^{-3}$)", short="CO", cmap="BuPu",
-        vmin=100.0, vmax=4000.0, log=True, fmt="{:.0f}", mask_below=250.0),
+        vmin=100.0, vmax=4000.0, log=True, fmt="{:.0f}", mask_below=250.0,
+        # a log bar defaults to decade labels only (10^2, 10^3), which reads as
+        # a maths axis rather than a concentration scale
+        cbar_ticks=[100, 200, 500, 1000, 2000, 4000],
+        # CAMS via Open-Meteo returns occasional 0 over the source region.
+        # Surface CO cannot be 0 (background ~100), and on a log scale those
+        # cells render as the palest colour -- clean air, directly over fires.
+        valid_min=30.0),
     "sulphur_dioxide": dict(
         label="Sulphur dioxide (µg m$^{-3}$)", short="SO2", cmap="PuBu",
         vmin=0.0, vmax=30.0, log=False, fmt="{:.1f}", mask_below=5.0),
@@ -112,8 +121,8 @@ VARS = {
 FIG_DPI = 160            # frames render at this; GIFs are resampled down from it
 
 # Credit line, upper left inside the map frame. Set to None to drop it.
-WATERMARK = "Made by: Juan Carlos Graciosa, PhD"
-WATERMARK_SUB = None      # e.g. an affiliation or handle on a second line
+WATERMARK = "Made by: Juan Carlos Graciosa et al."
+WATERMARK_SUB = None      # full author list lives in the site footer
 # position inside the map axes; (0.015, 0.977)+"left" sits over Vietnam,
 # (0.985, 0.977)+"right" sits over the Philippine Sea
 WATERMARK_XY, WATERMARK_HA = (0.015, 0.977), "left"

@@ -24,11 +24,21 @@ from compare_ground import prepared, hour_factors, split
 COR, OBS, SAFE_C = "#047857", "#1c1917", "#0891b2"
 NSIM, NBOOT, FCST_H = 3000, 400, 24
 HIST_H = 168          # 7 days back, so the station record is visible
-# EPA 24 h PM breakpoints, as a rough reference for an hourly trace
-THRESH = {"pm25": [(35.4, "AQI 100"), (55.4, "AQI 150"), (125.4, "AQI 200")],
-          "pm10": [(154, "AQI 100"), (254, "AQI 150")]}
-# WHO 2021 global air quality guidelines, 24 h mean. Compared here against an
-# hourly trace, so crossing it for one hour is not yet a guideline exceedance.
+# DENR-EMB categories, 24 h mean, verified against the signed DAO 2020-14
+# (PM2.5, stated in ug/m3 directly, not on a 0-500 index) and the EMB National
+# Air Quality Status Report 2016-2018 Table 3 (PM10, Annex of IRR). Colours are
+# the hex codes the DAO itself specifies.
+BANDS = {"pm25": [(0, 25, "Good"), (25, 35, "Fair"), (35, 45, "Unhealthy (sens.)"),
+                  (45, 55, "Very unhealthy"), (55, 90, "Acutely unhealthy"),
+                  (90, None, "Emergency")],
+         "pm10": [(0, 54, "Good"), (54, 154, "Fair"), (154, 254, "Unhealthy (sens.)"),
+                  (254, 354, "Very unhealthy"), (354, 424, "Acutely unhealthy"),
+                  (424, None, "Emergency")]}
+FILL = ["#00E400", "#FFFF00", "#FF7E00", "#FF0000", "#8F3F97", "#7E0023"]
+# yellow and green are illegible as text on white, so labels get darker variants
+LABEL = ["#15803d", "#a16207", "#c2410c", "#b91c1c", "#6b21a8", "#7e0023"]
+THRESH = {k: [(lo, nm) for lo, _, nm in v[1:]] for k, v in BANDS.items()}
+
 SAFE = {"pm25": 15.0, "pm10": 45.0}
 
 
@@ -76,56 +86,64 @@ def main() -> None:
     now_l = now + pd.Timedelta(hours=C.TZ_OFFSET_H)
 
     fig, axes = plt.subplots(2, 1, figsize=(12.4, 9.6), dpi=C.FIG_DPI, sharex=True)
-    summary = []
+    summary, panels = [], []
     for ax, key in zip(axes, ("pm25", "pm10")):
         S, m, sp = simulate(f, key, rng)
-        fut = f.time > now
         p25, p50, p75 = (np.percentile(S, q, 1) for q in (25, 50, 75))
-        ax.axvspan(now_l, f.t.max(), color="#a8a29e", alpha=0.10, zorder=0)
-        ax.axhspan(0, SAFE[key], color=SAFE_C, alpha=0.13, lw=0, zorder=0,
-                   label="within WHO 24 h guideline")
-        # 50% only: the 90% band reached ~700 and squashed everything else.
-        # Exceedance probabilities below still use the full distribution.
-        ax.fill_between(f.t, p25, p75, color=COR, alpha=0.30, lw=0,
+        ax.fill_between(f.t, p25, p75, color=COR, alpha=0.30, lw=0, zorder=3,
                         label="corrected CAMS · 50% band")
-        ax.plot(f.t, p50, lw=2.2, color=COR,
+        ax.plot(f.t, p50, lw=2.2, color=COR, zorder=4,
                 label="corrected CAMS · predictive median")
         st = m[m.t_pht >= f.t.min()]
         if len(st):
-            ax.plot(st.t_pht, st[sp["obs"]], lw=1.7, color=OBS,
-                    label="station (measured)")
-        ax.axvline(now_l, color=C.FIRE, lw=1.6, zorder=6)
+            ax.plot(st.t_pht, st[sp["obs"]], "o", ms=3.2, color=OBS,
+                    mec="white", mew=0.5, ls="none", zorder=5,
+                    label="station (EMB Central Visayas)")
         ax.set_ylim(bottom=0)
         ax.set_xlim(f.t.min(), f.t.max())
+        panels.append((ax, key, sp, S))
+
+    for ax, key, sp, S in panels:
+        top = ax.get_ylim()[1]
+        for (lo, hi, name), fc, lc in zip(BANDS[key], FILL, LABEL):
+            hi = top if hi is None else min(hi, top)
+            if lo >= top:
+                break
+            ax.axhspan(lo, hi, color=fc, alpha=0.16, lw=0, zorder=0)
+            # Good is labelled low in its band, not at the midpoint, to leave
+            # room for the WHO line that sits inside it
+            at = lo + (hi - lo) * (0.25 if name == "Good" else 0.5)
+            if hi - lo > top * 0.030:
+                ax.annotate(name, (1.008, at), xycoords=("axes fraction", "data"),
+                            ha="left", va="center", fontsize=6.5, color=lc,
+                            annotation_clip=False)
+        ax.axhline(SAFE[key], color=SAFE_C, lw=1.0, ls=(0, (4, 2)), zorder=2)
         ax.annotate(f"WHO 24 h {SAFE[key]:g}", (1.008, SAFE[key]),
                     xycoords=("axes fraction", "data"), ha="left", va="center",
                     fontsize=6.5, color=SAFE_C, annotation_clip=False)
+        # a grey wash is invisible over the category colours, so lighten the
+        # forecast window instead: white over the bands, under the data
+        ax.axvspan(now_l, f.t.max(), color="white", alpha=0.55, lw=0, zorder=1)
+        ax.axvline(now_l, color="#1c1917", lw=1.4, zorder=6)
         ax.text(now_l + (f.t.max() - now_l) / 2, 0.955, "forecast",
                 transform=ax.get_xaxis_transform(), ha="center", va="top",
-                fontsize=8.5, color=C.INK_MUTED, style="italic", zorder=7)
+                fontsize=8.5, color=C.INK, style="italic", zorder=20)
 
-        peak = S[fut.values].max(0)
-        # still reported on stdout, but kept off the figure: a probability that
-        # the PEAK HOUR crosses a 24 h breakpoint reads as a 24 h exceedance
+        peak = S[(f.time > now).values].max(0)
         probs = [(lab, (peak > t).mean() * 100) for t, lab in THRESH[key]]
-        for t, lab in THRESH[key]:
-            if t < ax.get_ylim()[1]:
-                ax.axhline(t, color="#d6d3d1", lw=0.7, ls="--", zorder=1)
-                ax.annotate(lab, (1.008, t), xycoords=("axes fraction", "data"),
-                            ha="left", va="center", fontsize=6.5,
-                            color=C.INK_MUTED, annotation_clip=False)
         ax.set_ylabel(f"{sp['label']} (µg m$^{{-3}}$)", fontsize=9.5, color=C.INK)
         ax.set_title(f"{sp['label']} · next 24 h peak {np.median(peak):.0f} "
                      f"(50% {np.percentile(peak,25):.0f}–{np.percentile(peak,75):.0f}, "
                      f"90% {np.percentile(peak,5):.0f}–{np.percentile(peak,95):.0f})",
                      fontsize=9.5, color=C.INK_MUTED, loc="left", pad=5)
-        ax.tick_params(labelsize=8, colors=C.INK_MUTED); ax.grid(alpha=0.22, lw=0.5)
+        ax.tick_params(labelsize=8, colors=C.INK_MUTED)
+        ax.grid(alpha=0.18, lw=0.5, zorder=2)
         for s_ in ("top", "right"):
             ax.spines[s_].set_visible(False)
         for s_ in ("left", "bottom"):
             ax.spines[s_].set_color("#d6d3d1")
         summary.append((key, np.median(peak), probs))
-    axes[0].legend(fontsize=8, ncol=4, loc="upper left", framealpha=0.9,
+    axes[0].legend(fontsize=8, ncol=2, loc="upper left", framealpha=0.9,
                    facecolor="white", edgecolor="#e7e5e4")
     axes[1].set_xlabel("Philippine time", fontsize=9.5, color=C.INK)
     axes[1].xaxis.set_major_formatter(mdates.DateFormatter("%d %b %Hh"))
@@ -136,7 +154,7 @@ def main() -> None:
              f"issued {now_l:%a %d %b %Y %H:%M} PHT · shaded = forecast · "
              f"50% band shown; the quoted 90% peak range uses the full distribution",
              fontsize=9.5, color=C.INK_MUTED, va="top")
-    notes = ["Shaded safe region = WHO 2021 24-hour guideline (PM2.5 15, PM10 45 ug/m3); it is a 24 h mean, drawn here against an hourly trace.",
+    notes = [             "Colour bands = DENR-EMB categories (PM2.5 DAO 2020-14, PM10 DAO 2013-13); dashed line = WHO 2021 24 h guideline. Both are 24 h means, drawn against an hourly trace.",
              "GFAS holds fire emissions constant through the forecast, so this assumes the upwind fires keep burning as last observed."]
     # no map and no trajectory on this figure, so neither notice applies
     for n, line in enumerate(notes + C.attribution(coastlines=False,

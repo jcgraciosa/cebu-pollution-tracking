@@ -144,6 +144,8 @@ def make_frame(k, aq, met, fires, site, obs, var, spec, bbox, draw_traj, outdir,
     src = pick_cube(aq, met, var)
     lat, lon = src["lat"], src["lon"]
     field = _scaled(src[var][k].astype("float32"), spec)
+    if spec.get("valid_min") is not None:
+        field = np.where(field < spec["valid_min"], np.nan, field)
     if basemap:
         if spec.get("mask_below") is not None:
             field = np.where(field < spec["mask_below"], np.nan, field)
@@ -151,17 +153,24 @@ def make_frame(k, aq, met, fires, site, obs, var, spec, bbox, draw_traj, outdir,
             field = np.where(field > spec["mask_above"], np.nan, field)
 
     nrow = 3 if len(obs) else 2
-    # size the canvas from the domain aspect: cartopy preserves it, so a tall
-    # box on a wide figure leaves a large empty margin
     asp = (bbox["north"] - bbox["south"]) / (bbox["east"] - bbox["west"])
-    fig_w = 10.5
-    map_h = fig_w * 0.80 * asp                       # map occupies ~80% of width
-    fig_h = map_h + (2.6 if nrow == 2 else 4.3)      # + strips, title, footer
-    fig = plt.figure(figsize=(fig_w, min(max(fig_h, 7.5), 15)), dpi=dpi or C.FIG_DPI)
-    gs = fig.add_gridspec(nrow, 1, height_ratios=[4.0, 1.0, 1.0][:nrow], hspace=0.30,
-                          left=0.06, right=0.93,
-                          top=0.905 if nrow == 2 else 0.922,
-                          bottom=0.15 if nrow == 2 else 0.125)
+    # Cartopy honours the domain aspect and letterboxes whatever is left over,
+    # so the figure height is solved for rather than guessed: make the map row
+    # exactly as tall as the map wants to be. Too short and it floats narrow
+    # above the time series; too tall and a dead band opens between them.
+    LEFT, RIGHT, HSPACE = 0.06, 0.93, 0.17
+    TOP = 0.905 if nrow == 2 else 0.922
+    BOTTOM = 0.15 if nrow == 2 else 0.125
+    CB_SHARE = 0.044                 # colorbar fraction + pad, taken off the map
+    ratios = [4.0, 1.0, 1.0][:nrow]
+    fig_w = 10.8
+    map_w = fig_w * (RIGHT - LEFT) * (1 - CB_SHARE)
+    units = sum(ratios) + HSPACE * (sum(ratios) / nrow) * (nrow - 1)
+    frac = (TOP - BOTTOM) * ratios[0] / units
+    fig_h = min(max(map_w * asp / frac, 7.5), 15)
+    fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi or C.FIG_DPI)
+    gs = fig.add_gridspec(nrow, 1, height_ratios=ratios, hspace=HSPACE,
+                          left=LEFT, right=RIGHT, top=TOP, bottom=BOTTOM)
     ax = fig.add_subplot(gs[0], projection=PC)
     extent = [bbox["west"], bbox["east"], bbox["south"], bbox["north"]]
     ax.set_extent(extent, crs=PC)
@@ -242,11 +251,15 @@ def make_frame(k, aq, met, fires, site, obs, var, spec, bbox, draw_traj, outdir,
     gl.top_labels = gl.right_labels = False
     gl.xlabel_style = gl.ylabel_style = {"size": 8, "color": C.INK_MUTED}
 
-    cb = fig.colorbar(mesh, ax=ax, pad=0.015, shrink=0.88, extend="max",
-                      spacing="proportional")
+    cb = fig.colorbar(mesh, ax=ax, pad=0.012, fraction=0.032, shrink=0.88,
+                      extend="max", spacing="proportional")
     cb.set_label(spec["label"], fontsize=9, color=C.INK)
     cb.ax.tick_params(labelsize=8, colors=C.INK_MUTED)
     cb.outline.set_visible(False)
+    if spec.get("cbar_ticks"):
+        cb.set_ticks(spec["cbar_ticks"])
+        cb.ax.set_yticklabels([f"{t:g}" for t in spec["cbar_ticks"]])
+        cb.ax.minorticks_off()
     if spec.get("band_names"):
         mids = [(spec["bands"][i] + spec["bands"][i + 1]) / 2
                 for i in range(len(spec["band_names"]))]
@@ -360,6 +373,14 @@ def make_frame(k, aq, met, fires, site, obs, var, spec, bbox, draw_traj, outdir,
         axb.tick_params(labelbottom=False)
         axb.set_xlabel("")
         axc.set_xlabel("Philippine time", fontsize=9, color=C.INK)
+
+    # the colourbar is taken out of the map's cell, so the strips would other-
+    # wise run wider than the map; align them to the map as actually drawn
+    fig.canvas.draw()
+    mp = ax.get_position()
+    for a in [axb] + ([axc] if nrow == 3 else []):
+        q = a.get_position()
+        a.set_position([mp.x0, q.y0, mp.width, q.height])
 
     lines = C.attribution(tstamp.year, basemap=img is not None,
                           trajectory=draw_traj)
