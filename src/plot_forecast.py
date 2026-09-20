@@ -24,6 +24,9 @@ from compare_ground import prepared, hour_factors, split
 COR, OBS, SAFE_C = "#047857", "#1c1917", "#0891b2"
 NSIM, NBOOT, FCST_H = 3000, 400, 24
 HIST_H = 168          # 7 days back, so the station record is visible
+# above C.FIG_DPI: this one is read closely on a phone and the dot markers and
+# 6.5 pt category labels need the pixels. The maps stay at the shared setting.
+DPI = 240
 # DENR-EMB categories, 24 h mean, verified against the signed DAO 2020-14
 # (PM2.5, stated in ug/m3 directly, not on a 0-500 index) and the EMB National
 # Air Quality Status Report 2016-2018 Table 3 (PM10, Annex of IRR). Colours are
@@ -85,7 +88,7 @@ def main() -> None:
     f["hr"] = f.t.dt.hour
     now_l = now + pd.Timedelta(hours=C.TZ_OFFSET_H)
 
-    fig, axes = plt.subplots(2, 1, figsize=(12.4, 9.6), dpi=C.FIG_DPI, sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(12.4, 9.6), dpi=DPI, sharex=True)
     summary, panels = [], []
     for ax, key in zip(axes, ("pm25", "pm10")):
         S, m, sp = simulate(f, key, rng)
