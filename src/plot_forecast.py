@@ -148,6 +148,12 @@ def main() -> None:
         summary.append((key, np.median(peak), probs))
     axes[0].legend(fontsize=8, ncol=2, loc="upper left", framealpha=0.9,
                    facecolor="white", edgecolor="#e7e5e4")
+    # seated under the legend rather than in a corner, so a screenshot that
+    # crops the figure still carries the credit
+    lg = axes[0].get_window_extent().transformed(axes[0].transAxes.inverted())
+    axes[0].text(0.013, 0.845, C.WATERMARK, transform=axes[0].transAxes,
+                 ha="left", va="top", fontsize=C.WATERMARK_SIZE,
+                 color=C.INK_MUTED, zorder=20)
     axes[1].set_xlabel("Philippine time", fontsize=9.5, color=C.INK)
     axes[1].xaxis.set_major_formatter(mdates.DateFormatter("%d %b %Hh"))
 

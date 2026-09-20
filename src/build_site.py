@@ -126,8 +126,10 @@ DWD ICON winds &middot; VIIRS active fire / thermal anomalies: NASA LANCE/FIRMS 
 imagery: NASA Worldview/GIBS &middot; served via Open-Meteo (CC BY 4.0) &middot;
 coastlines: Natural Earth<br>
 Neither the European Commission nor ECMWF is responsible for any use that may be made of the information it contains.<br>
-Juan Carlos Graciosa, Xavier Bacalla, Junelie Velonta, Vhan Sabellano
-&middot;
+Juan Carlos Graciosa (Australian National University) &middot;
+Xavier Bacalla (University of San Carlos) &middot;
+Junelie Velonta (University of San Carlos) &middot;
+Vhan Sabellano (PAGASA Visayas)<br>
 <a href="https://github.com/jcgraciosa/cebu-pollution-tracking">source</a>
 </footer></div></body></html>""")
 
