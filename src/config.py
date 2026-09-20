@@ -13,12 +13,13 @@ for _d in (DATA, FIGS, FRAMES):
 
 CEBU = dict(name="Cebu City", lat=10.32, lon=123.90)
 TZ_OFFSET_H, TZ_LABEL = 8, "PHT"     # Philippines is UTC+8 all year, no DST
-BBOX = dict(south=-6.0, north=16.0, west=104.0, east=129.0)
+BBOX = dict(south=-6.0, north=21.0, west=104.0, east=130.0)
 BBOX_LOCAL = dict(south=7.0, north=13.5, west=120.5, east=127.0)
 
 GRID_STEP = 1.0          # CAMS global is ~0.4 deg, so 1.0 subsamples it
 CHUNK = 25               # coordinates per Open-Meteo request
-PAST_DAYS = 10           # >5 so a 120 h back-trajectory completes on the first frame
+PAST_DAYS = 25           # long enough to keep overlapping the station record;
+                         # the map window is set separately by --days
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock
 
 # --- sources -----------------------------------------------------------------
@@ -27,9 +28,10 @@ MET_URL = "https://api.open-meteo.com/v1/forecast"
 
 AQ_VARS = ["aerosol_optical_depth", "pm2_5", "pm10", "carbon_monoxide",
            "nitrogen_dioxide", "sulphur_dioxide", "dust", "us_aqi"]
-MET_VARS = ["wind_speed_850hPa", "wind_direction_850hPa", "boundary_layer_height",
+MET_VARS = ["wind_speed_850hPa", "wind_direction_850hPa",
             "wind_speed_10m", "wind_direction_10m", "precipitation"]
-VIS_VARS = ["visibility"]   # own request, own model -- see VIS_MODEL
+# ICON and ECMWF IFS return nulls for both of these; they need their own model
+VIS_VARS = ["visibility", "boundary_layer_height"]
 
 # Pinned: best_match is a moving target and silently changes the trajectories.
 MET_MODEL, MET_MODEL_LABEL = "icon_seamless", "DWD ICON"
@@ -52,14 +54,19 @@ FIRMS_24H = {
                     "noaa-20-viirs-c2/csv/J1_VIIRS_C2_SouthEast_Asia_24h.csv",
 }
 FIRMS_AREA = "https://firms.modaps.eosdis.nasa.gov/api/area/csv/{key}/{src}/{area}/{days}"
+FIRMS_MAX_DAYS = 5        # the area API rejects day_range > 5
+# Gzipped: the archive grows ~2 MB/day uncompressed and is committed, which
+# would pass GitHub's 100 MB file limit within weeks. pandas handles .gz by
+# extension. Only these columns are read downstream; the rest are dropped.
+FIRES_CSV = DATA / "fires.csv.gz"
+FIRES_COLS = ["latitude", "longitude", "frp", "confidence",
+              "acq_date", "acq_time", "source", "when"]
 
-# The only real measurements here; everything else is model output.
-GROUND_OBS = [
-    dict(time="2026-08-31T22:00", us_aqi=152, station="Talisay City (DENR-EMB)",
-         source="SunStar Cebu, 1 Sep 2026"),
-    dict(time="2026-09-01T04:00", us_aqi=172, station="Talisay City (DENR-EMB)",
-         source="SunStar Cebu, 1 Sep 2026"),
-]
+# The only real measurements in the project. Hand-entered from EMB dashboards,
+# their Central Visayas Facebook plots, or news reports -- EMB publishes AQI
+# only through Power BI embeds and chart images, so there is nothing to automate.
+GROUND_OBS_CSV = DATA / "ground_obs.csv"
+GROUND_OBS_VAR = "us_aqi"
 
 # --- plotting ----------------------------------------------------------------
 # One hue per variable, light -> dark. mask_below hides unremarkable values so
@@ -117,22 +124,29 @@ HALO = "#f5f5f4"                          # light backing so they read on imager
 
 INK, INK_MUTED, SURFACE = "#1c1917", "#78716c", "#ffffff"
 FIRE, TRAJ, RECEPTOR = "#dc2626", "#0f172a", "#0f172a"
+WIND_KEY = 10             # m/s reference arrow drawn on every map
+TRAIN_FRAC = 0.70         # share of overlapping days used to fit the factors
+TRAJ_HOURS = 72           # completes for ~86% of frames; longer mostly
+                          # measures our domain edge, not the atmosphere
 FIRE_ALPHA = 0.55         # fires draw over the raster; keep them from dominating
 
 
-def attribution(year: int | None = None, basemap: bool = False) -> list[str]:
+def attribution(year: int | None = None, basemap: bool = False,
+                coastlines: bool = True, trajectory: bool = True) -> list[str]:
     """Licence-required notices. Copernicus needs both the notice and the
     disclaimer: https://apps.ecmwf.int/datasets/licences/cams"""
     import datetime as _dt
     y = year or _dt.date.today().year
     imagery = "  ·  imagery: NASA Worldview/GIBS" if basemap else ""
+    coast = "  ·  coastlines: Natural Earth" if coastlines else ""
+    traj = ("  ·  single-level kinematic trajectory, synoptic scale only"
+            if trajectory else "")
     return [
         f"Contains modified Copernicus Atmosphere Monitoring Service information {y}"
         f"  ·  {MET_MODEL_LABEL} winds  ·  {VIS_MODEL_LABEL} visibility",
-        f"VIIRS active fire: NASA LANCE/FIRMS{imagery}"
-        f"  ·  served via Open-Meteo (CC BY 4.0)  ·  coastlines: Natural Earth",
+        f"VIIRS active fire / thermal anomalies: NASA LANCE/FIRMS{imagery}"
+        f"  ·  served via Open-Meteo (CC BY 4.0){coast}",
         "Neither the European Commission nor ECMWF is responsible for any use "
         "that may be made of the information it contains.",
-        "Modelled fields, not measurements  ·  single-level kinematic trajectory, "
-        "synoptic scale only",
+        f"Modelled fields, not measurements{traj}",
     ]

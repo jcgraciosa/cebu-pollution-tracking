@@ -1,0 +1,89 @@
+name: update site
+
+on:
+  schedule:
+    # 22:00 UTC = 06:00 Philippine time, after the overnight CAMS cycle
+    - cron: "0 22 * * *"
+  workflow_dispatch:          # and on demand from the Actions tab
+
+concurrency:
+  group: update-site
+  cancel-in-progress: false
+
+permissions:
+  contents: write             # needed to force-push gh-pages
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # publish_site.sh writes a branch ref
+
+      - name: Set up environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+
+      # The keyless FIRMS feed only serves 24 h, so data/fires.csv.gz is an
+      # accumulating archive: restore it, extend it, save it back. Without this
+      # every run would start empty and the animation would lose its fires.
+      - name: Restore fire archive
+        uses: actions/cache/restore@v4
+        with:
+          path: data/fires.csv.gz
+          key: fires-${{ github.run_id }}
+          restore-keys: fires-
+
+      - name: Restore forecast archive
+        uses: actions/cache/restore@v4
+        with:
+          path: data/forecast_archive
+          key: fcst-${{ github.run_id }}
+          restore-keys: fcst-
+
+      - name: Update data, figures and site
+        shell: bash -el {0}
+        env:
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+        run: ./src/update_all.sh
+
+      - name: Save fire archive
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/fires.csv.gz
+          key: fires-${{ github.run_id }}
+
+      - name: Save forecast archive
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/forecast_archive
+          key: fcst-${{ github.run_id }}
+
+      - name: Publish gh-pages
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push -f origin gh-pages
+
+      - name: Summary
+        if: always()
+        shell: bash -el {0}
+        run: |
+          {
+            echo "### Site updated"
+            echo ""
+            echo "| file | size |"
+            echo "|---|---|"
+            for f in site/*.mp4 site/*.png; do
+              [ -e "$f" ] || continue
+              printf '| %s | %s |\n' "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+            done
+            echo ""
+            echo "fires.csv.gz: $(gzip -cd data/fires.csv.gz | wc -l) rows"
+          } >> "$GITHUB_STEP_SUMMARY"

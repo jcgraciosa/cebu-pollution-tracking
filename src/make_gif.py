@@ -46,17 +46,31 @@ def build_gif(frames, out, fps, scale, width=None, hold_last=1.5):
     return out
 
 
+def _ffmpeg():
+    """System ffmpeg if present, else the binary imageio-ffmpeg ships."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 def build_mp4(frames, out, fps):
-    if not shutil.which("ffmpeg"):
+    exe = _ffmpeg()
+    if not exe:
         return None
     lst = out.with_suffix(".txt")
     lst.write_text("".join(f"file '{f.resolve()}'\nduration {1/fps:.4f}\n"
                            for f in frames) + f"file '{frames[-1].resolve()}'\n")
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+            [exe, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
              "-i", str(lst), "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
-             "-r", str(fps), "-crf", "22", str(out)], check=True)
+             "-r", str(fps), "-crf", "26", "-movflags", "+faststart",
+             "-pix_fmt", "yuv420p", str(out)], check=True)
         return out
     except subprocess.CalledProcessError as e:                  # noqa: BLE001
         print(f"  ffmpeg failed: {e}", file=sys.stderr)

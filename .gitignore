@@ -1,8 +1,14 @@
 data/*
 # keyless FIRMS serves only the last 24 h, so this one cannot be re-fetched
-!data/fires.csv
+!data/fires.csv.gz
+# the DENR-EMB station record: every correction in the repo is built from it
+!data/aqi-data-1.xlsx
 figs/
 __pycache__/
 *.pyc
 .DS_Store
 .ipynb_checkpoints/
+site/
+# working notes, not part of the published project
+HANDOFF.md
+METHOD.md

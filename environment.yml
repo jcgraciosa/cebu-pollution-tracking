@@ -9,6 +9,8 @@ dependencies:
   - matplotlib
   - cartopy
   - requests
-  - imageio
   - pillow
+  - openpyxl          # reads the DENR-EMB station .xlsx
+  - scikit-learn      # PM retrieval from AOD/CO
+  - ffmpeg            # MP4 encoding; imageio-ffmpeg is the fallback
   - tqdm

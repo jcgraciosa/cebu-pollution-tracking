@@ -97,19 +97,43 @@ def fetch_fires(days: int) -> pd.DataFrame:
     if key:
         area = f'{C.BBOX["west"]},{C.BBOX["south"]},{C.BBOX["east"]},{C.BBOX["north"]}'
         for src in ("VIIRS_SNPP_NRT", "VIIRS_NOAA20_NRT"):
-            url = C.FIRMS_AREA.format(key=key, src=src, area=area, days=min(int(days), 10))
-            try:
-                r = requests.get(url, timeout=180)
-                r.raise_for_status()
-                if r.text.lstrip().lower().startswith("invalid"):
-                    print(f"  FIRMS rejected the MAP_KEY for {src}", file=sys.stderr)
-                    continue
-                df = pd.read_csv(io.StringIO(r.text))
+            # The area API caps day_range at 5, and its date parameter is the
+            # START of the window counting FORWARD -- not the end. Walk back in
+            # 5-day steps, asking for each window by its first day.
+            got = []
+            today = pd.Timestamp.now("UTC").normalize()
+            n_win = max(1, int(np.ceil(days / C.FIRMS_MAX_DAYS)))
+            # i == 0 asks for the window starting today, which is how the
+            # current (partial) day gets in at all
+            starts = [today - pd.Timedelta(days=C.FIRMS_MAX_DAYS * i)
+                      for i in range(n_win, -1, -1)]
+            for st in starts:
+                url = (C.FIRMS_AREA.format(key=key, src=src, area=area,
+                                           days=C.FIRMS_MAX_DAYS) + f"/{st:%Y-%m-%d}")
+                for attempt in range(3):
+                    try:
+                        r = requests.get(url, timeout=300)
+                        r.raise_for_status()
+                        txt = r.text.lstrip()
+                        if not txt.startswith("latitude"):
+                            print(f"  {src} {st:%d %b}: {txt[:70]}", file=sys.stderr)
+                            break
+                        got.append(pd.read_csv(io.StringIO(r.text)))
+                        break
+                    except Exception as e:                  # noqa: BLE001
+                        if attempt == 2:
+                            print(f"  {src} from {st:%d %b} failed after 3 tries: "
+                                  f"{type(e).__name__}", file=sys.stderr)
+                        else:
+                            time.sleep(5 * (attempt + 1))
+            if got:
+                df = pd.concat(got, ignore_index=True)
                 df["source"] = src
                 frames.append(df)
-                print(f"  {src}: {len(df)} detections ({days} d)", file=sys.stderr)
-            except Exception as e:                      # noqa: BLE001
-                print(f"  {src} failed: {e!r}", file=sys.stderr)
+                d = pd.to_datetime(df.acq_date)
+                print(f"  {src}: {len(df)} detections, {d.min():%d %b}..{d.max():%d %b} "
+                      f"({len(got)}/{len(starts)} windows)", file=sys.stderr)
+
     if not frames:
         print("  keyless 24 h files only -- fires will not be time-resolved",
               file=sys.stderr)
@@ -203,19 +227,27 @@ def main() -> None:
     if "fires" in parts:
         print("VIIRS active fire (FIRMS)...", file=sys.stderr)
         fires = fetch_fires(a.past_days)
-        out = C.DATA / "fires.csv"
-        if out.exists() and not a.replace_fires:
+        out = C.FIRES_CSV
+        # fall back to the pre-gzip archive once, so the migration keeps it
+        legacy = C.DATA / "fires.csv"
+        src_old = out if out.exists() else legacy
+        if src_old.exists() and not a.replace_fires:
             # keyless FIRMS only ever serves the last 24 h, so accumulate:
             # overwriting would permanently discard earlier days
-            old = pd.read_csv(out, parse_dates=["when"])
+            old = pd.read_csv(src_old, parse_dates=["when"], low_memory=False)
             before = len(old)
-            fires = (pd.concat([old, fires], ignore_index=True)
-                       .drop_duplicates(subset=["latitude", "longitude",
-                                                "acq_date", "acq_time", "source"])
-                       .sort_values("when").reset_index(drop=True))
+            fires = pd.concat([old, fires], ignore_index=True)
+            # The keyless 24 h feed and the area API name the same satellite
+            # differently ("VIIRS_SNPP" vs "VIIRS_SNPP_NRT"), so a source-keyed
+            # dedupe stored every overlapping detection twice.
+            fires["source"] = fires.source.str.replace("_NRT", "", regex=False)
+            fires = (fires.drop_duplicates(subset=["latitude", "longitude",
+                                                   "acq_date", "acq_time", "source"])
+                          .sort_values("when").reset_index(drop=True))
             print(f"  archive {before} + new -> {len(fires)} "
                   f"({len(fires)-before} added)", file=sys.stderr)
-        fires.to_csv(out, index=False)
+        fires = fires.reindex(columns=C.FIRES_COLS)
+        fires.to_csv(out, index=False, compression="gzip")
         span = f"{fires.when.min():%Y-%m-%d} .. {fires.when.max():%Y-%m-%d}"
         print(f"  {len(fires)} detections in the domain, {span}", file=sys.stderr)
 
