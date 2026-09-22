@@ -17,7 +17,9 @@ import requests
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
 
-STAGES = ("aq", "met", "vis", "site", "fires")
+STAGES = ("aq", "met", "vis", "site", "fires", "wind3d", "terrain", "column", "wind3d_big", "wind3d_fine")
+# wind3d is a research fetch over a small box; it is not part of the daily run
+DEFAULT_STAGES = STAGES[:5]
 
 
 def build_grid(step: float) -> list[tuple[float, float]]:
@@ -165,7 +167,7 @@ def main() -> None:
     p.add_argument("--forecast-days", type=int, default=C.FORECAST_DAYS)
     p.add_argument("--replace-fires", action="store_true",
                    help="overwrite the fire archive instead of appending to it")
-    p.add_argument("--parts", default=",".join(STAGES),
+    p.add_argument("--parts", default=",".join(DEFAULT_STAGES),
                    help=f"stages to run, comma separated: {','.join(STAGES)}")
     a = p.parse_args()
 
@@ -179,7 +181,7 @@ def main() -> None:
 
     if "aq" in parts:
         print("composition + AQI (CAMS)...", file=sys.stderr)
-        aq = fetch_points(C.AQ_URL, C.AQ_VARS, pts, a.past_days, min(a.forecast_days, 7))
+        aq = fetch_points(C.AQ_URL, C.AQ_VARS, pts, C.GRID_PAST_DAYS, min(a.forecast_days, 7))
         np.savez_compressed(C.DATA / "aq_grid.npz", **to_cube(aq, C.AQ_VARS, a.step))
 
     if parts & {"met", "vis"}:
@@ -187,12 +189,12 @@ def main() -> None:
         cube = dict(np.load(mp, allow_pickle=True)) if mp.exists() else {}
         if "met" in parts:
             print(f"winds ({C.MET_MODEL_LABEL})...", file=sys.stderr)
-            met = fetch_points(C.MET_URL, C.MET_VARS, pts, a.past_days,
+            met = fetch_points(C.MET_URL, C.MET_VARS, pts, C.GRID_PAST_DAYS,
                                a.forecast_days, models=C.MET_MODEL)
             cube.update(to_cube(met, C.MET_VARS, a.step))
         if "vis" in parts:
             print(f"visibility ({C.VIS_MODEL_LABEL})...", file=sys.stderr)
-            vis = fetch_points(C.MET_URL, C.VIS_VARS, pts, a.past_days,
+            vis = fetch_points(C.MET_URL, C.VIS_VARS, pts, C.GRID_PAST_DAYS,
                                a.forecast_days, models=C.VIS_MODEL)
             vc = to_cube(vis, C.VIS_VARS, a.step)
             # a vis-only refresh must adopt the new axes, or visibility ends up
@@ -201,7 +203,7 @@ def main() -> None:
                     and not np.array_equal(cube["time"], vc["time"]):
                 print("  time axis moved since the last pull; refreshing 'met' too",
                       file=sys.stderr)
-                met = fetch_points(C.MET_URL, C.MET_VARS, pts, a.past_days,
+                met = fetch_points(C.MET_URL, C.MET_VARS, pts, C.GRID_PAST_DAYS,
                                    a.forecast_days, models=C.MET_MODEL)
                 cube.update(to_cube(met, C.MET_VARS, a.step))
             cube.update({k: vc[k] for k in C.VIS_VARS})
@@ -223,6 +225,198 @@ def main() -> None:
                           **{v: s_vis[0]["hourly"][v] for v in C.VIS_VARS}})
         (df.merge(m, on="time", how="outer").sort_values("time")
            .to_csv(C.DATA / "cebu_timeseries.csv", index=False))
+
+    if "column" in parts:
+        # The time-height section needs ONE column, not the whole box. 9 points
+        # at 12 levels is a single request; the 441-point version was refused.
+        print("deep wind column over Cebu...", file=sys.stderr)
+        off = [-0.25, 0.0, 0.25]
+        ptsc = [(C.CEBU["lat"] + p1, C.CEBU["lon"] + p2) for p1 in off for p2 in off]
+        vc = [f"{v}_{lv}hPa" for lv in C.WIND3D_LEVELS
+              for v in ("wind_speed", "wind_direction", "vertical_velocity",
+                        "geopotential_height")]
+        rec = fetch_points(C.MET_URL, vc, ptsc, C.WIND3D_PAST_DAYS, a.forecast_days,
+                           models=C.WIND3D_MODEL)
+        tt = np.array(rec[0]["hourly"]["time"], dtype="datetime64[s]")
+        shape = (len(tt), len(C.WIND3D_LEVELS), 3, 3)
+        cube = {k: np.full(shape, np.nan, "float32")
+                for k in ("spd", "dir", "w", "z")}
+        key = {"wind_speed": "spd", "wind_direction": "dir",
+               "vertical_velocity": "w", "geopotential_height": "z"}
+        for n, r3 in enumerate(rec):
+            i, j = divmod(n, 3)
+            for li, lv in enumerate(C.WIND3D_LEVELS):
+                for var, short in key.items():
+                    ser = r3["hourly"].get(f"{var}_{lv}hPa")
+                    if ser is not None:
+                        cube[short][:, li, i, j] = [np.nan if x is None else x
+                                                    for x in ser]
+        np.savez_compressed(C.DATA / "wind_column.npz", time=tt,
+                            lat=np.array([C.CEBU["lat"] + o for o in off]),
+                            lon=np.array([C.CEBU["lon"] + o for o in off]),
+                            level=np.array(C.WIND3D_LEVELS), **cube)
+        nn = 100 * np.isfinite(cube["w"]).mean()
+        print(f"  wrote wind_column.npz {shape}, w non-null {nn:.0f}%",
+              file=sys.stderr)
+
+    if "wind3d_big" in parts:
+        # the same levels over the WHOLE map domain, for regional divergence.
+        # Coarser on purpose: divergence magnitude scales with grid spacing, so
+        # this field is not directly comparable to the 0.25 deg box.
+        print("3D wind over the full domain...", file=sys.stderr)
+        b, stb = C.BBOX, C.WIND3D_BIG_STEP
+        lab = np.round(np.arange(b["south"], b["north"] + 1e-9, stb), 4)
+        lob = np.round(np.arange(b["west"], b["east"] + 1e-9, stb), 4)
+        ptsb = [(float(x), float(y)) for x in lab for y in lob]
+        vb = [f"{v}_{lv}hPa" for lv in C.WIND3D_LEVELS
+              for v in ("wind_speed", "wind_direction", "vertical_velocity",
+                        "geopotential_height")]
+        print(f"  {len(ptsb)} points x {len(C.WIND3D_LEVELS)} levels",
+              file=sys.stderr)
+        rec = fetch_points(C.MET_URL, vb, ptsb, C.WIND3D_PAST_DAYS, a.forecast_days,
+                           models=C.WIND3D_MODEL)
+        tb = np.array(rec[0]["hourly"]["time"], dtype="datetime64[s]")
+        shape = (len(tb), len(C.WIND3D_LEVELS), lab.size, lob.size)
+        cube = {k: np.full(shape, np.nan, "float32")
+                for k in ("spd", "dir", "w", "z")}
+        key = {"wind_speed": "spd", "wind_direction": "dir",
+               "vertical_velocity": "w", "geopotential_height": "z"}
+        for n, r3 in enumerate(rec):
+            i, j = divmod(n, lob.size)
+            for li, lv in enumerate(C.WIND3D_LEVELS):
+                for var, short in key.items():
+                    ser = r3["hourly"].get(f"{var}_{lv}hPa")
+                    if ser is not None:
+                        cube[short][:, li, i, j] = [np.nan if x is None else x
+                                                    for x in ser]
+        np.savez_compressed(C.DATA / "wind3d_region.npz", time=tb, lat=lab,
+                            lon=lob, level=np.array(C.WIND3D_LEVELS), **cube)
+        print(f"  wrote wind3d_region.npz {shape}, w non-null "
+              f"{100*np.isfinite(cube['w']).mean():.0f}%", file=sys.stderr)
+
+    if "wind3d_fine" in parts:
+        # 68 requests at the daily quota's edge, so it CHECKPOINTS: each chunk
+        # is written to a .part file and a re-run skips what already landed.
+        # A 429 halfway through then costs the remaining chunks, not all of it.
+        b, stp = C.WIND3D_FINE, C.WIND3D_FINE_STEP
+        laf = np.round(np.arange(b["south"], b["north"] + 1e-9, stp), 4)
+        lof = np.round(np.arange(b["west"], b["east"] + 1e-9, stp), 4)
+        pts = [(float(x), float(y)) for x in laf for y in lof]
+        lv = C.WIND3D_LEVELS
+        vnames = [f"{v}_{l}hPa" for l in lv for v in C.WIND3D_VARS]
+        part = C.DATA / "wind3d_fine.part.npz"
+        final = C.DATA / "wind3d_fine.npz"
+        nch = int(np.ceil(len(pts) / C.CHUNK))
+        print(f"3D wind, {stp} deg over {b['south']:.0f}-{b['north']:.0f}N "
+              f"{b['west']:.0f}-{b['east']:.0f}E: {len(pts)} points, "
+              f"{len(lv)} levels, {nch} chunks", file=sys.stderr)
+
+        cube, done, times = None, np.zeros(nch, bool), None
+        if part.exists():
+            z = np.load(part, allow_pickle=True)
+            cube = {k: z[k] for k in ("spd", "dir", "w")}
+            done, times = z["done"], z["time"]
+            print(f"  resuming: {done.sum()}/{nch} chunks already stored",
+                  file=sys.stderr)
+
+        for ci in range(nch):
+            if done[ci]:
+                continue
+            chunk = pts[ci * C.CHUNK:(ci + 1) * C.CHUNK]
+            rec = fetch_points(C.MET_URL, vnames, chunk, C.WIND3D_PAST_DAYS,
+                               a.forecast_days, models=C.WIND3D_MODEL)
+            if times is None:
+                times = np.array(rec[0]["hourly"]["time"], dtype="datetime64[s]")
+                shape = (len(times), len(lv), laf.size, lof.size)
+                cube = {k: np.full(shape, np.nan, "float32")
+                        for k in ("spd", "dir", "w")}
+            key = {"wind_speed": "spd", "wind_direction": "dir",
+                   "vertical_velocity": "w"}
+            for n, r3 in enumerate(rec):
+                gi, gj = divmod(ci * C.CHUNK + n, lof.size)
+                for li, l in enumerate(lv):
+                    for var, short in key.items():
+                        ser = r3["hourly"].get(f"{var}_{l}hPa")
+                        if ser is not None:
+                            cube[short][:, li, gi, gj] = [
+                                np.nan if x is None else x for x in ser]
+            done[ci] = True
+            np.savez_compressed(part, time=times, done=done, **cube)
+            print(f"  chunk {ci+1}/{nch} stored", file=sys.stderr, flush=True)
+
+        z = np.array([C.WIND3D_Z[l] for l in lv], "float32")
+        np.savez_compressed(final, time=times, lat=laf, lon=lof,
+                            level=np.array(lv), z=z, **cube)
+        part.unlink(missing_ok=True)
+        print(f"  wrote {final.name} {cube['w'].shape}, w non-null "
+              f"{100*np.isfinite(cube['w']).mean():.0f}%", file=sys.stderr)
+
+    if "terrain" in parts:
+        print("terrain over the residence box (Open-Meteo elevation)...",
+              file=sys.stderr)
+        b, st4 = C.WIND3D_BOX, C.TERRAIN_STEP
+        tla = np.round(np.arange(b["south"], b["north"] + 1e-9, st4), 4)
+        tlo = np.round(np.arange(b["west"], b["east"] + 1e-9, st4), 4)
+        gla, glo = np.meshgrid(tla, tlo, indexing="ij")
+        flat_la, flat_lo = gla.ravel(), glo.ravel()
+        elev = np.full(flat_la.size, np.nan, "float32")
+        CH = 100                              # the elevation API caps at 100 coords
+        for i in range(0, flat_la.size, CH):
+            sl = slice(i, i + CH)
+            for attempt in range(5):
+                try:
+                    r = requests.get(C.ELEV_URL, timeout=90, params=dict(
+                        latitude=",".join(f"{x:.4f}" for x in flat_la[sl]),
+                        longitude=",".join(f"{x:.4f}" for x in flat_lo[sl])))
+                    if r.status_code == 429:
+                        time.sleep(60); continue
+                    r.raise_for_status()
+                    elev[sl] = r.json()["elevation"]
+                    break
+                except Exception as e:                      # noqa: BLE001
+                    if attempt == 4:
+                        raise
+                    time.sleep(5 * (attempt + 1))
+            if (i // CH) % 20 == 0:
+                print(f"  {min(i + CH, flat_la.size):6d}/{flat_la.size} points",
+                      file=sys.stderr, flush=True)
+        np.savez_compressed(C.DATA / "terrain.npz", lat=tla, lon=tlo,
+                            elev=elev.reshape(gla.shape))
+        print(f"  wrote terrain.npz {gla.shape}, "
+              f"{np.nanmax(elev):.0f} m max", file=sys.stderr)
+
+    if "wind3d" in parts:
+        print(f"3D wind over the residence box ({C.WIND3D_MODEL_LABEL})...",
+              file=sys.stderr)
+        b, st3 = C.WIND3D_BOX, C.WIND3D_STEP
+        la3 = np.round(np.arange(b["south"], b["north"] + 1e-9, st3), 4)
+        lo3 = np.round(np.arange(b["west"], b["east"] + 1e-9, st3), 4)
+        pts3 = [(float(a), float(o)) for a in la3 for o in lo3]
+        v3 = [f"{v}_{lv}hPa" for lv in C.WIND3D_LEVELS
+              for v in ("wind_speed", "wind_direction", "vertical_velocity",
+                        "geopotential_height")]
+        print(f"  {len(pts3)} points x {len(C.WIND3D_LEVELS)} levels", file=sys.stderr)
+        rec = fetch_points(C.MET_URL, v3, pts3, C.WIND3D_PAST_DAYS, a.forecast_days,
+                           models=C.WIND3D_MODEL)
+        times = np.array(rec[0]["hourly"]["time"], dtype="datetime64[s]")
+        shape = (len(times), len(C.WIND3D_LEVELS), la3.size, lo3.size)
+        cube3 = {k: np.full(shape, np.nan, "float32")
+                 for k in ("spd", "dir", "w", "z")}
+        key = {"wind_speed": "spd", "wind_direction": "dir",
+               "vertical_velocity": "w", "geopotential_height": "z"}
+        for n, r3 in enumerate(rec):
+            i, j = divmod(n, lo3.size)
+            for li, lv in enumerate(C.WIND3D_LEVELS):
+                for var, short in key.items():
+                    ser = r3["hourly"].get(f"{var}_{lv}hPa")
+                    if ser is None:
+                        continue
+                    cube3[short][:, li, i, j] = [np.nan if x is None else x
+                                                 for x in ser]
+        np.savez_compressed(C.DATA / "wind3d.npz", time=times, lat=la3, lon=lo3,
+                            level=np.array(C.WIND3D_LEVELS), **cube3)
+        nn = 100 * np.isfinite(cube3["w"]).mean()
+        print(f"  wrote wind3d.npz {shape}, w non-null {nn:.0f}%", file=sys.stderr)
 
     if "fires" in parts:
         print("VIIRS active fire (FIRMS)...", file=sys.stderr)

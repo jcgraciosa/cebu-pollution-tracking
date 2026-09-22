@@ -19,7 +19,42 @@ BBOX = dict(south=-10.0, north=21.0, west=94.0, east=130.0)
 BBOX_LOCAL = dict(south=7.0, north=13.5, west=120.5, east=127.0)
 
 GRID_STEP = 1.0          # CAMS global is ~0.4 deg, so 1.0 subsamples it
+
+# --- 3D residence-time box ---------------------------------------------------
+# Big enough that its boundary flux is not a single-cell artefact (>= 5 cells at
+# the map grid) and that the wind field is actually resolved across it.
+WIND3D_BOX = dict(south=8.0, north=13.0, west=121.0, east=126.0)
+WIND3D_STEP = 0.25
+# ICON returns 200-with-nulls for vertical_velocity; IFS serves it, is 0.25 deg
+# native, and is the model CAMS itself runs on.
+WIND3D_MODEL, WIND3D_MODEL_LABEL = "ecmwf_ifs025", "ECMWF IFS"
+# up to 100 hPa (~16.7 km): enough to rule in or out a plume travelling above
+# the mid-troposphere and subsiding into Cebu
+WIND3D_LEVELS = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100]
+WIND3D_LID = 2500.0      # m; above this a parcel has left the air Cebu breathes
+WIND3D_SEED_Z = [200.0, 500.0, 1000.0, 1500.0]
+ELEV_URL = "https://api.open-meteo.com/v1/elevation"
+# Finest useful resolution (IFS025 is 0.25 deg native) over the transport
+# corridor, reaching back past the peak. Geopotential height is NOT fetched:
+# it varies by sd ~16 m against level gaps of 700-1650 m, so the observed means
+# below are exact enough and the saving is 25% of the request.
+WIND3D_FINE = dict(south=5.0, north=15.0, west=118.0, east=128.0)
+WIND3D_FINE_STEP = 0.25
+WIND3D_VARS = ("wind_speed", "wind_direction", "vertical_velocity")
+WIND3D_Z = {1000: 93.0, 925: 778.0, 850: 1512.0, 700: 3159.0, 600: 4429.0,
+            500: 5890.0, 400: 7624.0, 300: 9751.0, 250: 11027.0, 200: 12514.0,
+            150: 14317.0, 100: 16675.0}
+WIND3D_BIG_STEP = 1.0    # regional divergence; see the note in download.py
+# Open-Meteo serves pressure levels for the last ~8 days only. Asking for
+# PAST_DAYS (25) returned 17 days of nulls on every pressure-level fetch --
+# about 3x the payload for nothing, and quota we could not afford.
+WIND3D_PAST_DAYS = 9
+TERRAIN_STEP = 0.05      # ~5.5 km; enough to read Cebu's spine and Kanlaon
 CHUNK = 25               # coordinates per Open-Meteo request
+# The GRID only feeds the 5-day animations, so it does not need the long window
+# the station comparison does. Fetching 25 days x 1280 points was what pushed
+# the nightly job past its timeout.
+GRID_PAST_DAYS = 10
 PAST_DAYS = 25           # long enough to keep overlapping the station record;
                          # the map window is set separately by --days
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock
