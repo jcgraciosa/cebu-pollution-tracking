@@ -22,11 +22,16 @@ import config as C
 A_EARTH = 6_371_000.0
 
 
-def divergence3d(u, v, w, lat, lon, z):
+def divergence3d(u, v, w, lat, lon, z, zfull=None):
     """(time, level, lat, lon) fields -> divergence in 1/s.
 
     Centred differences inside, one-sided at the edges (np.gradient), so the
     boundary rows are the least trustworthy part of the result.
+
+    zfull, if given, is the per-column height (t, z, lat, lon). On a hybrid
+    sigma grid the layer thickness varies with surface pressure -- 40 to 79 m
+    where the domain mean is 59 -- so using the mean for d/dz is wrong by that
+    much, worst near the ground and over terrain. Pass it.
     """
     phi = np.deg2rad(lat)[None, None, :, None]
     dphi = np.deg2rad(np.gradient(lat))[None, None, :, None]
@@ -40,13 +45,28 @@ def divergence3d(u, v, w, lat, lon, z):
 
     # 1/r^2 d(r^2 w)/dz, expanded so the uneven level spacing is handled by
     # gradient on the actual heights
-    r2w = (r ** 2) * w
-    div_v = np.gradient(r2w, z, axis=1) / (r ** 2)
+    if zfull is None:
+        r2w = (r ** 2) * w
+        div_v = np.gradient(r2w, z, axis=1) / (r ** 2)
+    else:
+        rr = A_EARTH + zfull
+        r2w = (rr ** 2) * w
+        # second-order centred differences on a non-uniform, per-column axis
+        dz_up = np.diff(zfull, axis=1)
+        div_v = np.empty_like(w)
+        du = np.diff(r2w, axis=1)
+        div_v[:, 1:-1] = ((du[:, 1:] * dz_up[:, :-1] / dz_up[:, 1:]
+                           + du[:, :-1] * dz_up[:, 1:] / dz_up[:, :-1])
+                          / (dz_up[:, :-1] + dz_up[:, 1:]))
+        div_v[:, 0] = du[:, 0] / dz_up[:, 0]
+        div_v[:, -1] = du[:, -1] / dz_up[:, -1]
+        div_v /= rr ** 2
     return div_h + div_v, div_h, div_v
 
 
 def load(src="wind3d.npz"):
-    d = np.load(C.DATA / src, allow_pickle=True)
+    path = src if os.path.isabs(src) else C.DATA / src
+    d = np.load(path, allow_pickle=True)
     zl = (np.nanmean(d["z"], axis=(0, 2, 3)) if d["z"].ndim == 4
           else np.asarray(d["z"], float))
     o = np.argsort(zl)
@@ -55,8 +75,9 @@ def load(src="wind3d.npz"):
     u, v, w = -spd * np.sin(rad), -spd * np.cos(rad), d["w"][:, o]
     t = pd.to_datetime(d["time"])
     keep = np.isfinite(u).all(axis=(1, 2, 3))
+    zf = d["zfull"][keep][:, o] if "zfull" in d.files else None
     return (t[keep], d["lat"].astype(float), d["lon"].astype(float), zl[o],
-            u[keep], v[keep], w[keep])
+            u[keep], v[keep], w[keep], zf)
 
 
 def main() -> None:
@@ -66,13 +87,17 @@ def main() -> None:
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.out is None:
-        a.out = str(C.DATA / a.src.replace("wind3d", "divergence"))
+        a.out = str(a.src if os.path.isabs(a.src)
+                    else C.DATA / a.src).replace("wind3d", "divergence")
 
-    t, lat, lon, z, u, v, w = load(a.src)
+    t, lat, lon, z, u, v, w, zfull = load(a.src)
     print(f"{a.src}: {u.shape}  lat {lat.min():.1f}..{lat.max():.1f} "
           f"lon {lon.min():.1f}..{lon.max():.1f}  step "
           f"{abs(lat[1]-lat[0]):.2f} deg", file=sys.stderr)
-    div, dh, dv = divergence3d(u, v, w, lat, lon, z)
+    div, dh, dv = divergence3d(u, v, w, lat, lon, z, zfull)
+    if zfull is None:
+        print("  WARNING: no per-column heights in this cube; d/dz uses the "
+              "domain mean", file=sys.stderr)
     np.savez_compressed(a.out, time=t.values.astype("datetime64[s]"),
                         lat=lat, lon=lon, z=z,
                         div=div.astype("float32"), div_h=dh.astype("float32"),

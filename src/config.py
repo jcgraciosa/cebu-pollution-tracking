@@ -176,7 +176,8 @@ FIRE_ALPHA = 0.55         # fires draw over the raster; keep them from dominatin
 
 
 def attribution(year: int | None = None, basemap: bool = False,
-                coastlines: bool = True, trajectory: bool = True) -> list[str]:
+                coastlines: bool = True, trajectory: bool = True,
+                cams: bool = True, gfs: bool = False) -> list[str]:
     """Licence-required notices. Copernicus needs both the notice and the
     disclaimer: https://apps.ecmwf.int/datasets/licences/cams"""
     import datetime as _dt
@@ -185,12 +186,20 @@ def attribution(year: int | None = None, basemap: bool = False,
     coast = "  ·  coastlines: Natural Earth" if coastlines else ""
     traj = ("  ·  single-level kinematic trajectory, synoptic scale only"
             if trajectory else "")
-    return [
-        f"Contains modified Copernicus Atmosphere Monitoring Service information {y}"
-        f"  ·  {MET_MODEL_LABEL} winds  ·  {VIS_MODEL_LABEL} visibility",
-        f"VIIRS active fire / thermal anomalies: NASA LANCE/FIRMS{imagery}"
-        f"  ·  served via Open-Meteo (CC BY 4.0){coast}",
-        "Neither the European Commission nor ECMWF is responsible for any use "
-        "that may be made of the information it contains.",
-        f"Modelled fields, not measurements{traj}",
-    ]
+    out = []
+    if cams:
+        out += [
+            f"Contains modified Copernicus Atmosphere Monitoring Service "
+            f"information {y}  ·  {MET_MODEL_LABEL} winds  ·  "
+            f"{VIS_MODEL_LABEL} visibility",
+            f"VIIRS active fire / thermal anomalies: NASA LANCE/FIRMS{imagery}"
+            f"  ·  served via Open-Meteo (CC BY 4.0){coast}",
+            # required by the CAMS licence alongside the notice above
+            "Neither the European Commission nor ECMWF is responsible for any "
+            "use that may be made of the information it contains.",
+        ]
+    if gfs:
+        out.append("Meteorology: NOAA NCEP GFS 0.25 deg, ARL-format archive from "
+                   "NOAA Air Resources Laboratory (public domain)" + coast)
+    out.append(f"Modelled fields, not measurements{traj}")
+    return out

@@ -42,7 +42,13 @@ def _style(ax):
 
 
 def main() -> None:
-    d = np.load(C.DATA / "wind3d.npz", allow_pickle=True)
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--src", default="wind3d.npz")
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--zmax", type=float, default=None, help="top of the sections, m")
+    a = ap.parse_args()
+    d = np.load(C.DATA / a.src, allow_pickle=True)
     zl = (np.nanmean(d["z"], axis=(0, 2, 3)) if d["z"].ndim == 4
           else np.asarray(d["z"], float)); o = np.argsort(zl)
     zl = zl[o]
@@ -63,6 +69,11 @@ def main() -> None:
     mag = np.hypot(uc, vc)
     # meteorological convention: the direction the wind blows FROM
     az = (np.degrees(np.arctan2(-uc, -vc)) + 360) % 360
+    if a.zmax:                                  # 40 GFS levels reach 14.7 km
+        keepz = zl <= a.zmax
+        zl = zl[keepz]
+        wc, uc, vc = wc[:, keepz], uc[:, keepz], vc[:, keepz]
+        mag, az = mag[:, keepz], az[:, keepz]
     epi = t >= EPI
     lo3 = zl <= 3000
     tn = mdates.date2num(t)
@@ -101,8 +112,9 @@ def main() -> None:
             kw = dict(vmin=0, vmax=np.nanpercentile(field, 99))
         pm = ax.pcolormesh(tn, zl / 1000, field.T, cmap=cmap,
                            shading="nearest", **kw)
-        ax.set_yticks(zl / 1000)
-        ax.set_yticklabels([f"{z/1000:.1f}" for z in zl])
+        if len(zl) <= 10:
+            ax.set_yticks(zl / 1000)
+            ax.set_yticklabels([f"{z/1000:.1f}" for z in zl])
         ax.axvline(mdates.date2num(EPI), color="#111827", lw=1.8)
         ax.axhline(C.WIND3D_LID / 1000, color="#111827", lw=0.8, ls=":")
         ax.set_xlim(tn[0], tn[-1])
@@ -163,15 +175,19 @@ def main() -> None:
              color=C.INK, weight="bold", va="top")
     fig.text(0.075, 0.936,
              f"83 km mean centred on {d['lat'][i]:.2f}°N {d['lon'][k]:.2f}°E · "
-             f"{C.WIND3D_MODEL_LABEL} · six pressure levels · "
+             f"{'NOAA GFS 0.25 deg ARL' if 'arl' in a.src else C.WIND3D_MODEL_LABEL} · "
+             f"{len(zl)} levels · "
              f"{C.WATERMARK.replace('Made by: ', '')}",
              fontsize=9, color=C.INK_MUTED, va="top")
     notes = ["Direction uses the meteorological convention: the bearing the wind blows FROM. Transport goes the opposite way, so a 250° wind carries smoke toward 70°.",
              "Its colour map is cyclic — north wraps at both ends of the bar — because 359° and 1° are one degree apart, not 358.",
-             "Six levels only (0.09, 0.78, 1.51, 3.16, 4.43, 5.89 km): drawn as blocks, with nothing interpolated between them.",
-             "Resolved motion only. No convection at 0.25°, and an 83 km mean cannot see Cebu's own terrain."]
+             f"{len(zl)} levels, {np.diff(zl).min():.0f}-{np.diff(zl).max():.0f} m apart, drawn as blocks: nothing is interpolated between them.",
+             "The dotted line is 2.5 km, the lid used in the residence calculation. Mactan soundings put the real capping inversion at 1.5-1.9 km, so it sits too high.",
+             "Resolved motion only. No convection at 0.25 deg, and an 83 km mean cannot see Cebu's own terrain."]
+    arl = "arl" in a.src
     for n, line in enumerate(notes + C.attribution(coastlines=False,
-                                                   trajectory=False)):
+                                                   trajectory=False,
+                                                   cams=True, gfs=arl)):
         fig.text(0.075, 0.138 - n * 0.0112, line, fontsize=6.4,
                  color=C.INK_MUTED, va="top")
 
@@ -204,7 +220,7 @@ def main() -> None:
     except ImportError:
         pass
 
-    out = C.FIGS / "wind_column.png"
+    out = C.FIGS / (a.out or "wind_column.png")
     fig.savefig(out, facecolor=C.SURFACE); plt.close(fig)
     print(f"wrote {out}")
 
