@@ -11,7 +11,6 @@ from __future__ import annotations
 import os, sys
 import numpy as np
 import pandas as pd
-import requests
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -19,7 +18,7 @@ import matplotlib.dates as mdates
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
-from compare_ground import prepared, hour_factors, split
+from compare_ground import prepared, hour_factors, split, forecast_frame
 
 COR, OBS, SAFE_C = "#047857", "#1c1917", "#0891b2"
 NSIM, NBOOT, FCST_H = 3000, 400, 24
@@ -77,15 +76,11 @@ def simulate(f, key, rng):
 
 def main() -> None:
     rng = np.random.default_rng(0)
-    r = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params=dict(
-        latitude=C.CEBU["lat"], longitude=C.CEBU["lon"], hourly="pm2_5,pm10",
-        past_days=9, forecast_days=2, timezone="UTC"), timeout=60).json()["hourly"]
-    f = pd.DataFrame(r); f["time"] = pd.to_datetime(f.time)
+    f = forecast_frame(["pm2_5", "pm10"], past_hours=9 * 24)
     now = pd.Timestamp.now(tz="UTC").tz_localize(None).floor("h")
     f = f[(f.time >= now - pd.Timedelta(hours=HIST_H)) &
           (f.time <= now + pd.Timedelta(hours=FCST_H))].copy()
-    f["t"] = f.time + pd.Timedelta(hours=C.TZ_OFFSET_H)
-    f["hr"] = f.t.dt.hour
+    f["t"] = f.t_pht
     now_l = now + pd.Timedelta(hours=C.TZ_OFFSET_H)
 
     fig, axes = plt.subplots(2, 1, figsize=(12.4, 9.6), dpi=DPI, sharex=True)

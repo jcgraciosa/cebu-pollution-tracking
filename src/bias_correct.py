@@ -10,7 +10,6 @@ from __future__ import annotations
 import os, sys
 import numpy as np
 import pandas as pd
-import requests
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -18,7 +17,7 @@ import matplotlib.dates as mdates
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
-from compare_ground import load_pairs
+from compare_ground import load_pairs, split, forecast_frame
 
 OBS, RAW, COR = "#b45309", "#7e22ce", "#047857"
 
@@ -33,13 +32,8 @@ def scores(o, p):
 
 
 def fetch_forecast():
-    r = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params=dict(
-        latitude=C.CEBU["lat"], longitude=C.CEBU["lon"],
-        hourly="pm2_5,aerosol_optical_depth,carbon_monoxide", forecast_days=2,
-        past_days=1, timezone="UTC"), timeout=60).json()["hourly"]
-    f = pd.DataFrame(r); f["time"] = pd.to_datetime(f.time)
-    f["t_pht"] = f.time + pd.Timedelta(hours=C.TZ_OFFSET_H); f["hr"] = f.t_pht.dt.hour
-    return f
+    return forecast_frame(["pm2_5", "aerosol_optical_depth", "carbon_monoxide"],
+                          past_hours=24)
 
 
 def main() -> None:

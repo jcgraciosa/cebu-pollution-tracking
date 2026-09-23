@@ -4,6 +4,10 @@ on:
   schedule:
     # 22:00 UTC = 06:00 Philippine time, after the overnight CAMS cycle
     - cron: "0 22 * * *"
+    # 18:00 PHT. Open-Meteo was degraded for half an hour on 23 Sep and the
+    # morning slot landed in it; a second attempt costs nothing since every
+    # stage is idempotent (the fire archive appends and de-duplicates).
+    - cron: "0 10 * * *"
   workflow_dispatch:          # and on demand from the Actions tab
 
 concurrency:
@@ -65,8 +69,13 @@ jobs:
           path: data/forecast_archive
           key: fcst-${{ github.run_id }}
 
+      # always(): update_all.sh now exits 1 *after* building the site when a
+      # figure stage failed, so the maps that did render still reach the site.
       - name: Publish gh-pages
+        if: always()
         run: |
+          git rev-parse --verify gh-pages >/dev/null 2>&1 || {
+            echo "gh-pages was never built; nothing to publish"; exit 0; }
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git push -f origin gh-pages

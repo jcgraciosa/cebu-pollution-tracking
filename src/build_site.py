@@ -33,6 +33,7 @@ header{padding:48px 0 8px}
 h1{font-size:1.9rem;margin:0 0 6px;letter-spacing:-.02em}
 .sub{color:#78716c;margin:0 0 4px}
 .stamp{color:#a8a29e;font-size:.85rem}
+.stale{color:#b45309;font-weight:600}
 section{margin:44px 0 0}
 h2{font-size:1.15rem;margin:0 0 4px;letter-spacing:-.01em}
 h2 a{color:inherit;text-decoration:none}
@@ -51,6 +52,26 @@ video,img.fig,.note{background:#1c1917;border-color:#292524}
 h1,h2{color:#fafaf9}.sub,p.cap{color:#a8a29e}
 footer{border-color:#292524}}
 """
+
+
+def stale_note(src):
+    """Flag a figure older than this run's data, or "" if it is current.
+
+    download.py writes meta.json at the top of every run, so anything with an
+    older mtime was not regenerated -- its stage failed and update_all.sh
+    carried on. Saying so beats publishing yesterday's outlook as today's.
+    """
+    meta = C.DATA / "meta.json"
+    if not meta.exists():
+        return ""
+    import json
+    run = pd.Timestamp(json.loads(meta.read_text())["downloaded_utc"]).tz_convert(None)
+    fig = pd.Timestamp(src.stat().st_mtime, unit="s")
+    if fig >= run:
+        return ""
+    age = (pd.Timestamp.now(tz="UTC").tz_localize(None) - fig) / pd.Timedelta(days=1)
+    return (f' <span class="stale">Not updated this run — showing '
+            f'{fig:%d %b %H:%M} UTC, {age:.1f} days old.</span>')
 
 
 def poster(stem):
@@ -94,9 +115,10 @@ def main() -> None:
         src = C.FIGS / fn
         if not src.exists():
             continue
+        note = stale_note(src)
         shutil.copy2(src, SITE / fn)
         body.append(f"""<section id="{anchor}"><h2><a href="#{anchor}">{title}</a></h2>
-<p class="cap">{cap}</p>
+<p class="cap">{cap}{note}</p>
 <img class="fig" src="{fn}" alt="{title}" loading="lazy"></section>""")
 
     for md in ("README.md",):

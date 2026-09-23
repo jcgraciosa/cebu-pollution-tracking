@@ -140,13 +140,26 @@ def fetch_fires(days: int) -> pd.DataFrame:
         print("  keyless 24 h files only -- fires will not be time-resolved",
               file=sys.stderr)
         for name, url in C.FIRMS_24H.items():
-            r = requests.get(url, timeout=180)
-            r.raise_for_status()
-            df = pd.read_csv(io.StringIO(r.text))
-            df["source"] = name
-            frames.append(df)
-            print(f"  {name}: {len(df)} detections (24 h)", file=sys.stderr)
+            # same 3 attempts as the keyed path above: this feed only serves the
+            # last 24 h, so a timeout here loses that day's fires permanently
+            for attempt in range(3):
+                try:
+                    r = requests.get(url, timeout=180)
+                    r.raise_for_status()
+                    df = pd.read_csv(io.StringIO(r.text))
+                    df["source"] = name
+                    frames.append(df)
+                    print(f"  {name}: {len(df)} detections (24 h)", file=sys.stderr)
+                    break
+                except Exception as e:                  # noqa: BLE001
+                    if attempt == 2:
+                        print(f"  {name} failed after 3 tries: {type(e).__name__}",
+                              file=sys.stderr)
+                    else:
+                        time.sleep(5 * (attempt + 1))
 
+    if not frames:
+        raise RuntimeError("every FIRMS source failed; no fire data this run")
     fires = pd.concat(frames, ignore_index=True)
     fires = fires[fires.latitude.between(C.BBOX["south"], C.BBOX["north"]) &
                   fires.longitude.between(C.BBOX["west"], C.BBOX["east"])]
@@ -213,11 +226,13 @@ def main() -> None:
     if "site" in parts:
         print("receptor series at Cebu City...", file=sys.stderr)
         here = [(C.CEBU["lat"], C.CEBU["lon"])]
-        site = fetch_points(C.AQ_URL, C.AQ_VARS, here, a.past_days, min(a.forecast_days, 7))
+        # SITE_FORECAST_DAYS, not FORECAST_DAYS: this CSV is the forecast figures'
+        # only source. All three calls use it so the merged frame stays rectangular.
+        site = fetch_points(C.AQ_URL, C.AQ_VARS, here, a.past_days, C.SITE_FORECAST_DAYS)
         s_met = fetch_points(C.MET_URL, C.MET_VARS, here, a.past_days,
-                             a.forecast_days, models=C.MET_MODEL)
+                             C.SITE_FORECAST_DAYS, models=C.MET_MODEL)
         s_vis = fetch_points(C.MET_URL, C.VIS_VARS, here, a.past_days,
-                             a.forecast_days, models=C.VIS_MODEL)
+                             C.SITE_FORECAST_DAYS, models=C.VIS_MODEL)
         df = pd.DataFrame({"time": site[0]["hourly"]["time"],
                            **{v: site[0]["hourly"][v] for v in C.AQ_VARS}})
         m = pd.DataFrame({"time": s_met[0]["hourly"]["time"],

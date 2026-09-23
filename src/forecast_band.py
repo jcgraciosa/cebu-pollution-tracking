@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse, os, sys
 import numpy as np
 import pandas as pd
-import requests
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -23,21 +22,18 @@ import matplotlib.dates as mdates
 
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
-from compare_ground import prepared, hour_factors, split, SPECIES
+from compare_ground import prepared, hour_factors, split, SPECIES, forecast_frame
 
 ARCHIVE = C.DATA / "forecast_archive"
+# unconditional: the CI cache step saves this path with if:always(), so a run
+# that dies before --archive would otherwise fail with a path-validation error
+ARCHIVE.mkdir(parents=True, exist_ok=True)
 RAW, COR, OBS = "#a78bfa", "#047857", "#1c1917"
 
 
 def fetch(species):
     sp = SPECIES[species]
-    r = requests.get("https://air-quality-api.open-meteo.com/v1/air-quality", params=dict(
-        latitude=C.CEBU["lat"], longitude=C.CEBU["lon"], hourly=sp["mod"],
-        past_days=3, forecast_days=2, timezone="UTC"), timeout=60).json()["hourly"]
-    f = pd.DataFrame(r); f["time"] = pd.to_datetime(f.time)
-    f["t_pht"] = f.time + pd.Timedelta(hours=C.TZ_OFFSET_H)
-    f["hr"] = f.t_pht.dt.hour
-    return f, sp
+    return forecast_frame([sp["mod"]], past_hours=72), sp
 
 
 def main() -> None:

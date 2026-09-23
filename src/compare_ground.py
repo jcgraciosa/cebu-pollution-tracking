@@ -68,6 +68,37 @@ def prepared(species="pm25"):
               f"{age:.1f} days old", file=sys.stderr)
     return out, sp
 
+
+def forecast_frame(cols, past_hours=None):
+    """Cebu point series from data/cebu_timeseries.csv, with local-hour columns.
+
+    The forecast figures used to fetch this from Open-Meteo themselves -- three
+    scripts, five unretried requests a night. On 23 Sep one read timeout killed
+    the nightly run 31 minutes in. download.py's site stage already pulls the
+    same point through fetch_points, which retries six times, so read that.
+    """
+    path = C.DATA / "cebu_timeseries.csv"
+    if not path.exists():
+        raise SystemExit(f"{path} missing; run: python src/download.py --parts site")
+    f = pd.read_csv(path, parse_dates=["time"])
+    missing = [c for c in cols if c not in f.columns]
+    if missing:
+        raise SystemExit(f"{path} has no {missing}; check C.AQ_VARS")
+    f = f[["time", *cols]].copy()
+    f["t_pht"] = f.time + pd.Timedelta(hours=C.TZ_OFFSET_H)
+    f["hr"] = f.t_pht.dt.hour
+
+    # a short forward window means the site stage did not run, or ran with the
+    # wrong forecast_days -- the figures would silently lose their outlook
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+    ahead = (f.time.max() - now) / pd.Timedelta(hours=1)
+    if ahead < 24:
+        print(f"  warning: forecast window only {ahead:.0f} h ahead; "
+              f"expected ~{C.SITE_FORECAST_DAYS * 24}", file=sys.stderr)
+    if past_hours is not None:
+        f = f[f.time >= now.floor("h") - pd.Timedelta(hours=past_hours)]
+    return f.reset_index(drop=True)
+
 # EPA PM2.5 breakpoints (2024 revision): (Clow, Chigh, Ilow, Ihigh)
 AQI_BP = [(0.0, 9.0, 0, 50), (9.1, 35.4, 51, 100), (35.5, 55.4, 101, 150),
           (55.5, 125.4, 151, 200), (125.5, 225.4, 201, 300), (225.5, 325.4, 301, 500)]

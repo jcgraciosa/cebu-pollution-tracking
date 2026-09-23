@@ -58,6 +58,10 @@ GRID_PAST_DAYS = 10
 PAST_DAYS = 25           # long enough to keep overlapping the station record;
                          # the map window is set separately by --days
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock
+# The receptor series feeds the forecast figures, which plot 2 days ahead. It is
+# their only source -- they used to fetch it themselves, unretried, and one read
+# timeout took down the whole nightly run.
+SITE_FORECAST_DAYS = 2
 
 # --- sources -----------------------------------------------------------------
 AQ_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"

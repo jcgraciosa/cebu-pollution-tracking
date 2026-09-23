@@ -25,13 +25,19 @@ URL = ("https://weather.uwyo.edu/wsgi/sounding?datetime={d}%20{h}:00:00"
 def fetch(day: str, hour: int) -> pd.DataFrame | None:
     CACHE.mkdir(exist_ok=True)
     f = CACHE / f"{day}_{hour:02d}Z.txt"
-    if not f.exists():
+    # an empty cache file means a previous fetch failed; retry rather than
+    # treating one bad network moment as a permanent absence of this sounding
+    if not f.exists() or f.stat().st_size == 0:
         # curl, not requests: the server rejects the re-encoded URL requests sends
         r = subprocess.run(["curl", "-sS", "--http1.1", "-m", "60",
                             URL.format(d=day, h=f"{hour:02d}")],
                            capture_output=True, text=True)
         pre = re.findall(r"<PRE>(.*?)</PRE>", r.stdout, re.S | re.I)
-        f.write_text(html.unescape(pre[0]) if pre else "")
+        if r.returncode != 0 or not pre:
+            why = r.stderr.strip() or "no <PRE> block in the response"
+            print(f"  sounding {day} {hour:02d}Z unavailable: {why}", file=sys.stderr)
+            return None
+        f.write_text(html.unescape(pre[0]))
     txt = f.read_text()
     rows = []
     for line in txt.splitlines():
