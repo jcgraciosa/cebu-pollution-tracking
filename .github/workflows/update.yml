@@ -49,6 +49,13 @@ jobs:
           key: fcst-${{ github.run_id }}
           restore-keys: fcst-
 
+      # publish_site.sh runs commit-tree from inside update_all.sh, so the
+      # identity has to exist before the pipeline, not just before the push
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Update data, figures and site
         shell: bash -el {0}
         env:
@@ -76,8 +83,6 @@ jobs:
         run: |
           git rev-parse --verify gh-pages >/dev/null 2>&1 || {
             echo "gh-pages was never built; nothing to publish"; exit 0; }
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git push -f origin gh-pages
 
       - name: Summary
