@@ -62,7 +62,11 @@ def fetch_points(url, hourly, pts, past_days, forecast_days,
             except Exception as e:                      # noqa: BLE001
                 if attempt == 5:
                     raise
-                time.sleep(5 * (attempt + 1))
+                # 30/60/120/240/480 s, not 5/10/15/20/25. Open-Meteo degrades
+                # for minutes at a time -- 200 with an empty body, or no body
+                # at all -- and 75 s of total backoff exhausted all six
+                # attempts on 24 Sep while the server was still unwell.
+                time.sleep(min(30 * 2 ** attempt, 480))
                 print(f"    retry {attempt+1}: {e!r}", file=sys.stderr)
         else:
             raise RuntimeError(f"gave up after 6 attempts at offset {i}")

@@ -4,10 +4,6 @@ on:
   schedule:
     # 22:00 UTC = 06:00 Philippine time, after the overnight CAMS cycle
     - cron: "0 22 * * *"
-    # 18:00 PHT. Open-Meteo was degraded for half an hour on 23 Sep and the
-    # morning slot landed in it; a second attempt costs nothing since every
-    # stage is idempotent (the fire archive appends and de-duplicates).
-    - cron: "0 10 * * *"
   workflow_dispatch:          # and on demand from the Actions tab
 
 concurrency:
