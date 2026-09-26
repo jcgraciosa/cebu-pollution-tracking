@@ -55,6 +55,12 @@ CHUNK = 25               # coordinates per Open-Meteo request
 # the station comparison does. Fetching 25 days x 1280 points was what pushed
 # the nightly job past its timeout.
 GRID_PAST_DAYS = 10
+# How much of that window each run actually fetches. The rest is spliced in from
+# the cached cube. Asking for 11 days x 25 points x 8 variables per request is
+# what drives the ReadTimeouts: on 26 Sep, 61 of the 69 download minutes were
+# spent waiting, and the run died on the 90 min cap. 3 days is enough overlap to
+# absorb CAMS revising its recent analysis hours.
+GRID_FETCH_DAYS = 3
 PAST_DAYS = 25           # long enough to keep overlapping the station record;
                          # the map window is set separately by --days
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock

@@ -45,6 +45,18 @@ jobs:
           key: fcst-${{ github.run_id }}
           restore-keys: fcst-
 
+      # Each run fetches GRID_FETCH_DAYS and splices the rest in from here.
+      # Without this the cube starts empty every run and the short fetch would
+      # silently produce a 3-day animation instead of a 10-day one.
+      - name: Restore grid cubes
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/aq_grid.npz
+            data/met_grid.npz
+          key: grid-${{ github.run_id }}
+          restore-keys: grid-
+
       # publish_site.sh runs commit-tree from inside update_all.sh, so the
       # identity has to exist before the pipeline, not just before the push
       - name: Configure git identity
@@ -71,6 +83,15 @@ jobs:
         with:
           path: data/forecast_archive
           key: fcst-${{ github.run_id }}
+
+      - name: Save grid cubes
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            data/aq_grid.npz
+            data/met_grid.npz
+          key: grid-${{ github.run_id }}
 
       # always(): update_all.sh now exits 1 *after* building the site when a
       # figure stage failed, so the maps that did render still reach the site.

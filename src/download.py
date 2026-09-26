@@ -62,11 +62,11 @@ def fetch_points(url, hourly, pts, past_days, forecast_days,
             except Exception as e:                      # noqa: BLE001
                 if attempt == 5:
                     raise
-                # 30/60/120/240/480 s, not 5/10/15/20/25. Open-Meteo degrades
-                # for minutes at a time -- 200 with an empty body, or no body
-                # at all -- and 75 s of total backoff exhausted all six
-                # attempts on 24 Sep while the server was still unwell.
-                time.sleep(min(30 * 2 ** attempt, 480))
+                # 15/30/60/120/240. Nearly every failure clears on the first
+                # retry, so attempt 1 stays cheap; the later steps are there to
+                # ride out a real outage. Starting at 30 added 11 min to the
+                # 26 Sep run and pushed it 20 s past the 90 min cap.
+                time.sleep(min(15 * 2 ** attempt, 240))
                 print(f"    retry {attempt+1}: {e!r}", file=sys.stderr)
         else:
             raise RuntimeError(f"gave up after 6 attempts at offset {i}")
@@ -95,6 +95,91 @@ def to_cube(records, variables, step) -> dict:
             cubes[v][:, i, j] = np.array(
                 [np.nan if x is None else x for x in series], dtype="float32")
     return dict(time=np.array(times), lat=lats, lon=lons, **cubes)
+
+
+def fetch_days(path, step) -> int:
+    """GRID_FETCH_DAYS when a cube is there to splice onto, else the full window.
+
+    The short fetch is only an optimisation; it is correct just when the cache
+    already covers the hours the fetch will not. If the cache is absent, stale
+    or from a different grid, a short fetch would leave a hole and the animation
+    would quietly shorten instead of failing. So it self-heals: first run, cache
+    eviction, or a few days skipped all fall back to the full pull.
+    """
+    if not path.exists():
+        return C.GRID_PAST_DAYS
+    fp = json.dumps({"bbox": C.BBOX, "step": float(step)}, sort_keys=True)
+    try:
+        d = np.load(path, allow_pickle=True)
+        if str(d["fp"]) != fp:
+            return C.GRID_PAST_DAYS
+        last = pd.to_datetime(np.asarray(d["time"]).astype(str)).max()
+    except Exception:                               # noqa: BLE001
+        return C.GRID_PAST_DAYS
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+    gap = (now - last) / pd.Timedelta(days=1)
+    if gap >= C.GRID_FETCH_DAYS:
+        print(f"  cache ends {gap:.1f} days back; pulling the full window",
+              file=sys.stderr)
+        return C.GRID_PAST_DAYS
+    return C.GRID_FETCH_DAYS
+
+
+def merge_cube(path, new, step, keep_days=None):
+    """Splice a short fresh fetch onto the cached cube; the fetch wins on overlap.
+
+    Each run fetches GRID_FETCH_DAYS and inherits the rest from disk, so the
+    request payload drops by roughly two thirds. That is what the ReadTimeouts
+    scale with -- not the number of requests, which is fixed by the grid.
+
+    Newest wins because CAMS revises its recent analysis hours. The cache is
+    discarded outright if the bbox, step or grid shape moved, since a cube whose
+    halves disagree about what a pixel means is worse than no cube.
+    """
+    fp = json.dumps({"bbox": C.BBOX, "step": float(step)}, sort_keys=True)
+    old = None
+    if path.exists():
+        try:
+            d = dict(np.load(path, allow_pickle=True))
+            if (str(d.get("fp", "")) == fp
+                    and np.array_equal(d.get("lat"), new["lat"])
+                    and np.array_equal(d.get("lon"), new["lon"])):
+                old = d
+            else:
+                print("  grid definition changed; rebuilding the cube",
+                      file=sys.stderr)
+        except Exception as e:                      # noqa: BLE001
+            print(f"  cached cube unreadable ({type(e).__name__}); rebuilding",
+                  file=sys.stderr)
+
+    if old is None:
+        out = dict(new)
+    else:
+        ot = np.asarray(old["time"]).astype(str)
+        nt = np.asarray(new["time"]).astype(str)
+        keep = ~np.isin(ot, nt)
+        times = np.concatenate([ot[keep], nt])
+        order = np.argsort(times)           # ISO 8601 sorts chronologically
+        ny, nx = new["lat"].size, new["lon"].size
+        out = {"time": times[order], "lat": new["lat"], "lon": new["lon"]}
+        for v in sorted((set(old) | set(new)) - {"time", "lat", "lon", "fp"}):
+            a = (old[v][keep] if v in old
+                 else np.full((int(keep.sum()), ny, nx), np.nan, "float32"))
+            b = (new[v] if v in new
+                 else np.full((nt.size, ny, nx), np.nan, "float32"))
+            out[v] = np.concatenate([a, b])[order]
+        print(f"  cache: {keep.sum()} hours kept + {nt.size} fetched "
+              f"= {times.size}", file=sys.stderr)
+
+    if keep_days is not None:
+        t = pd.to_datetime(np.asarray(out["time"]).astype(str))
+        cut = (pd.Timestamp.now(tz="UTC").tz_localize(None).floor("D")
+               - pd.Timedelta(days=keep_days))
+        m = np.asarray(t >= cut)
+        if not m.all():
+            out = {k: (v if k in ("lat", "lon") else v[m]) for k, v in out.items()}
+    out["fp"] = np.array(fp)
+    return out
 
 
 def fetch_fires(days: int) -> pd.DataFrame:
@@ -198,34 +283,37 @@ def main() -> None:
 
     if "aq" in parts:
         print("composition + AQI (CAMS)...", file=sys.stderr)
-        aq = fetch_points(C.AQ_URL, C.AQ_VARS, pts, C.GRID_PAST_DAYS, min(a.forecast_days, 7))
-        np.savez_compressed(C.DATA / "aq_grid.npz", **to_cube(aq, C.AQ_VARS, a.step))
+        ap = C.DATA / "aq_grid.npz"
+        aq = fetch_points(C.AQ_URL, C.AQ_VARS, pts, fetch_days(ap, a.step),
+                          min(a.forecast_days, 7))
+        np.savez_compressed(ap, **merge_cube(ap, to_cube(aq, C.AQ_VARS, a.step),
+                                             a.step, C.GRID_PAST_DAYS))
 
     if parts & {"met", "vis"}:
         mp = C.DATA / "met_grid.npz"
-        cube = dict(np.load(mp, allow_pickle=True)) if mp.exists() else {}
+        mdays = fetch_days(mp, a.step)
+        fresh = {}
         if "met" in parts:
             print(f"winds ({C.MET_MODEL_LABEL})...", file=sys.stderr)
-            met = fetch_points(C.MET_URL, C.MET_VARS, pts, C.GRID_PAST_DAYS,
+            met = fetch_points(C.MET_URL, C.MET_VARS, pts, mdays,
                                a.forecast_days, models=C.MET_MODEL)
-            cube.update(to_cube(met, C.MET_VARS, a.step))
+            fresh.update(to_cube(met, C.MET_VARS, a.step))
         if "vis" in parts:
             print(f"visibility ({C.VIS_MODEL_LABEL})...", file=sys.stderr)
-            vis = fetch_points(C.MET_URL, C.VIS_VARS, pts, C.GRID_PAST_DAYS,
+            vis = fetch_points(C.MET_URL, C.VIS_VARS, pts, mdays,
                                a.forecast_days, models=C.VIS_MODEL)
             vc = to_cube(vis, C.VIS_VARS, a.step)
-            # a vis-only refresh must adopt the new axes, or visibility ends up
-            # indexed against a stale time axis from the previous pull
-            if "met" not in parts and cube.get("time") is not None \
-                    and not np.array_equal(cube["time"], vc["time"]):
-                print("  time axis moved since the last pull; refreshing 'met' too",
+            # both models must land on one axis before the merge, or visibility
+            # ends up indexed against hours that belong to the wind field
+            if fresh and not np.array_equal(fresh["time"], vc["time"]):
+                print("  met and vis disagree on the time axis; refetching met",
                       file=sys.stderr)
-                met = fetch_points(C.MET_URL, C.MET_VARS, pts, C.GRID_PAST_DAYS,
+                met = fetch_points(C.MET_URL, C.MET_VARS, pts, mdays,
                                    a.forecast_days, models=C.MET_MODEL)
-                cube.update(to_cube(met, C.MET_VARS, a.step))
-            cube.update({k: vc[k] for k in C.VIS_VARS})
-            cube["time"], cube["lat"], cube["lon"] = vc["time"], vc["lat"], vc["lon"]
-        np.savez_compressed(C.DATA / "met_grid.npz", **cube)
+                fresh = to_cube(met, C.MET_VARS, a.step)
+            fresh.update({k: vc[k] for k in C.VIS_VARS})
+            fresh["time"], fresh["lat"], fresh["lon"] = vc["time"], vc["lat"], vc["lon"]
+        np.savez_compressed(mp, **merge_cube(mp, fresh, a.step, C.GRID_PAST_DAYS))
 
     if "site" in parts:
         print("receptor series at Cebu City...", file=sys.stderr)
