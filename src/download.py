@@ -47,7 +47,7 @@ def fetch_points(url, hourly, pts, past_days, forecast_days,
             params["models"] = models
         for attempt in range(6):
             try:
-                r = requests.get(url, params=params, timeout=180)
+                r = requests.get(url, params=params, timeout=C.GRID_TIMEOUT)
                 if r.status_code == 429:
                     # metered per minute/hour/day, so a short backoff is useless
                     wait = int(r.headers.get("Retry-After", 0)) or min(90 * 2 ** attempt, 900)

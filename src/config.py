@@ -61,6 +61,12 @@ GRID_PAST_DAYS = 10
 # spent waiting, and the run died on the 90 min cap. 3 days is enough overlap to
 # absorb CAMS revising its recent analysis hours.
 GRID_FETCH_DAYS = 3
+# Open-Meteo answers in 0.61 s median, 2.84 s at p90, or it hangs until the
+# timeout -- measured over 141 chunk requests on 27 Sep, and the distribution is
+# bimodal with nothing in between. 180 s was 300x the median, so 11 hung
+# requests cost 33 of the 37 download minutes. 30 s is still 10x p90, and there
+# are six attempts behind it.
+GRID_TIMEOUT = 30
 PAST_DAYS = 25           # long enough to keep overlapping the station record;
                          # the map window is set separately by --days
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock
