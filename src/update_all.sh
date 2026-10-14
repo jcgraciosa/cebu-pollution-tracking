@@ -43,10 +43,10 @@ if [ "$FORECAST_ONLY" = 0 ]; then
   # Split deliberately: the grids are what the maps need, so losing them means
   # there is nothing worth publishing. The receptor series only feeds the
   # forecast figures, so it stales those alone.
-  $PY src/download.py --parts aq,fires,met,vis --step 1.0
+  $PY src/download.py --parts aq,fires,met,vis
 fi
 step "receptor series at Cebu"
-try $PY src/download.py --parts site --step 1.0
+try $PY src/download.py --parts site
 
 if [ "$RENDER" = 1 ]; then
   # AOD (column) and CO (conservative tracer) follow a transported plume;
