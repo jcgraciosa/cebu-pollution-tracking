@@ -15,10 +15,13 @@ CEBU = dict(name="Cebu City", lat=10.32, lon=123.90)
 TZ_OFFSET_H, TZ_LABEL = 8, "PHT"     # Philippines is UTC+8 all year, no DST
 # west to Sumatra: the Riau/Jambi fires are a second source region, and the
 # domain now reads wider than tall, which fills the figure better
-BBOX = dict(south=-10.0, north=21.0, west=94.0, east=130.0)
+BBOX = dict(south=-12.0, north=21.0, west=94.0, east=168.0)
 BBOX_LOCAL = dict(south=7.0, north=13.5, west=120.5, east=127.0)
 
-GRID_STEP = 1.0          # CAMS global is ~0.4 deg, so 1.0 subsamples it
+# 1.5 not 1.0: the domain now reaches New Guinea, and 1.0 deg over it would be
+# 7,650 calls a run against Open-Meteo's 5,000/hour. 2.2x the area for fewer
+# calls than the old box.
+GRID_STEP = 1.5          # CAMS global is ~0.4 deg, so 1.0 subsamples it
 
 # --- 3D residence-time box ---------------------------------------------------
 # Big enough that its boundary flux is not a single-cell artefact (>= 5 cells at
