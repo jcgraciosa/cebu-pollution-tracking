@@ -60,6 +60,10 @@ if [ "$RENDER" = 1 ]; then
   done
 fi
 
+# Forecast stage suppressed 14 Oct 2026: station data ends 20 Sep, so the
+# correction is fitted on a stale window and the published peak was 3.3x too
+# high. Set FORECAST=1 to re-enable once new station data lands.
+if [ "${FORECAST:-0}" = 1 ]; then
 step "forecast and correction figures"
 try $PY src/plot_forecast.py
 for sp in pm25 pm10; do
@@ -75,6 +79,9 @@ done
 try $PY src/compare_ground.py
 try $PY src/plot_diurnal.py
 try $PY src/plot_timeseries_ground.py
+else
+  step "forecast stage SKIPPED (FORECAST=0; station data stale)"
+fi
 
 step "build site and gh-pages branch"
 $PY src/build_site.py

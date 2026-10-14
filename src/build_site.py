@@ -21,9 +21,12 @@ ANIM = [("aerosol_optical_depth", "aod", "Aerosol optical depth",
         ("carbon_monoxide", "co", "Carbon monoxide",
          "Surface CO at 10 m — the conservative tracer. Persists after aerosol is scavenged."),
 ]
-FIGS = [("cebu_forecast.png", "forecast", "PM2.5 and PM10 · 24 h outlook",
-         "Corrected CAMS against the DENR-EMB station, with a 50% predictive band. "
-         "The shaded floor is the WHO 2021 24-hour guideline.")]
+# Forecast panel suppressed 14 Oct 2026. The station record ends 20 Sep, so the
+# per-hour correction factors are fitted on a 23-day-old window; and the 24 h
+# peak is inflated ~3.3x because simulate() draws an independent residual per
+# hour when residuals are autocorrelated at lag-1 r = +0.73. Restore once new
+# DENR-EMB data is loaded and the residual draw is shared per simulation.
+FIGS: list[tuple[str, str, str, str]] = []
 
 CSS = """*{box-sizing:border-box}
 body{margin:0;font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -114,6 +117,13 @@ def main() -> None:
     for fn, anchor, title, cap in FIGS:
         src = C.FIGS / fn
         if not src.exists():
+            # CI starts with an empty figs/, so a failed stage means ABSENT, not
+            # stale. Silently dropping the section makes the site look fine while
+            # a panel has quietly disappeared.
+            body.append(f'''<section id="{anchor}"><h2>{title}</h2>
+<p class="cap">{cap} <span class="stale">This panel could not be generated in the
+latest run and has been omitted. See the repository Actions log.</span></p></section>''')
+            print(f"  MISSING: {fn} -- section rendered with a notice", file=sys.stderr)
             continue
         note = stale_note(src)
         shutil.copy2(src, SITE / fn)

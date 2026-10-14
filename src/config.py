@@ -67,8 +67,12 @@ GRID_FETCH_DAYS = 3
 # requests cost 33 of the 37 download minutes. 30 s is still 10x p90, and there
 # are six attempts behind it.
 GRID_TIMEOUT = 30
-PAST_DAYS = 25           # long enough to keep overlapping the station record;
-                         # the map window is set separately by --days
+# Must stay longer than the gap between today and the END of the station file,
+# or the paired record shrinks to nothing and the bias correction dies with
+# "n_splits greater than the number of groups". At 25 days the overlap with a
+# station file ending 20 Sep had fallen to 2 by mid-October. Open-Meteo serves
+# 120+ days for a single point, so this is cheap insurance.
+PAST_DAYS = 92           # the map window is set separately by --days
 FORECAST_DAYS = 1        # today's hours live here; frames trim at the clock
 # The receptor series feeds the forecast figures, which plot 2 days ahead. It is
 # their only source -- they used to fetch it themselves, unretried, and one read
