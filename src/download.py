@@ -17,9 +17,9 @@ import requests
 sys.path.insert(0, os.path.dirname(__file__))
 import config as C
 
-STAGES = ("aq", "met", "vis", "site", "fires", "wind3d", "terrain", "column", "wind3d_big", "wind3d_fine")
+STAGES = ("aq", "met", "vis", "site", "fires", "aeronet", "wind3d", "traj3d", "terrain", "column", "wind3d_big", "wind3d_fine")
 # wind3d is a research fetch over a small box; it is not part of the daily run
-DEFAULT_STAGES = STAGES[:5]
+DEFAULT_STAGES = STAGES[:6]
 
 
 def build_grid(step: float) -> list[tuple[float, float]]:
@@ -316,8 +316,11 @@ def main() -> None:
         np.savez_compressed(mp, **merge_cube(mp, fresh, a.step, C.GRID_PAST_DAYS))
 
     if "site" in parts:
-        print("receptor series at Cebu City...", file=sys.stderr)
-        here = [(C.CEBU["lat"], C.CEBU["lon"])]
+        names = ", ".join(x["name"] for x in C.SITES)
+        print(f"receptor series at {names}...", file=sys.stderr)
+        # All sites ride in the same three requests: CHUNK is 25, so a second
+        # receptor costs 3 extra location-calls out of ~2300 per run.
+        here = [(x["lat"], x["lon"]) for x in C.SITES]
         # SITE_FORECAST_DAYS, not FORECAST_DAYS: this CSV is the forecast figures'
         # only source. All three calls use it so the merged frame stays rectangular.
         site = fetch_points(C.AQ_URL, C.AQ_VARS, here, a.past_days, C.SITE_FORECAST_DAYS)
@@ -325,13 +328,55 @@ def main() -> None:
                              C.SITE_FORECAST_DAYS, models=C.MET_MODEL)
         s_vis = fetch_points(C.MET_URL, C.VIS_VARS, here, a.past_days,
                              C.SITE_FORECAST_DAYS, models=C.VIS_MODEL)
-        df = pd.DataFrame({"time": site[0]["hourly"]["time"],
-                           **{v: site[0]["hourly"][v] for v in C.AQ_VARS}})
-        m = pd.DataFrame({"time": s_met[0]["hourly"]["time"],
-                          **{v: s_met[0]["hourly"][v] for v in C.MET_VARS},
-                          **{v: s_vis[0]["hourly"][v] for v in C.VIS_VARS}})
-        (df.merge(m, on="time", how="outer").sort_values("time")
-           .to_csv(C.DATA / "cebu_timeseries.csv", index=False))
+        for n, st in enumerate(C.SITES):
+            df = pd.DataFrame({"time": site[n]["hourly"]["time"],
+                               **{v: site[n]["hourly"][v] for v in C.AQ_VARS}})
+            m = pd.DataFrame({"time": s_met[n]["hourly"]["time"],
+                              **{v: s_met[n]["hourly"][v] for v in C.MET_VARS},
+                              **{v: s_vis[n]["hourly"][v] for v in C.VIS_VARS}})
+            out = C.DATA / f"{C.site_slug(st)}_timeseries.csv"
+            (df.merge(m, on="time", how="outer").sort_values("time")
+               .to_csv(out, index=False))
+            print(f"  {st['name']}: {len(df)} hours -> {out.name}", file=sys.stderr)
+
+    if "aeronet" in parts:
+        # Level 1.5: cloud-screened and near-real-time. Level 2.0 is
+        # quality-assured but lags about a year, which is useless here.
+        for st in C.SITES:
+            sid = st.get("aeronet")
+            if not sid:
+                continue
+            end = pd.Timestamp.now()
+            beg = end - pd.Timedelta(days=a.past_days)
+            try:
+                r = requests.get(C.AERONET_URL, timeout=120, params={
+                    "site": sid, "year": beg.year, "month": beg.month,
+                    "day": beg.day, "year2": end.year, "month2": end.month,
+                    "day2": end.day, "AOD15": 1, "AVG": 10, "if_no_html": 1})
+                r.raise_for_status()
+                txt = r.text
+                h = next((i for i, l in enumerate(txt.splitlines())
+                          if l.startswith("AERONET_Site")
+                          or l.startswith("Date(dd:mm:yyyy)")), None)
+                if h is None:
+                    print(f"  AERONET {sid}: no data in window", file=sys.stderr)
+                    continue
+                d = pd.read_csv(io.StringIO(txt), skiprows=h).replace(-999.0, np.nan)
+                dc = next(c for c in d.columns if c.lower().startswith("date"))
+                tc = next((c for c in d.columns if c.lower().startswith("time")), None)
+                ts = d[dc].astype(str) + (" " + d[tc].astype(str) if tc else " 12:00:00")
+                d["time"] = pd.to_datetime(ts, format="%d:%m:%Y %H:%M:%S",
+                                           errors="coerce")
+                ang = "440-870_Angstrom_Exponent"
+                d = d.dropna(subset=["time", "AOD_500nm", ang])
+                # 500 -> 550 nm, the wavelength CAMS reports
+                d["aod550"] = d.AOD_500nm * (550.0 / 500.0) ** (-d[ang])
+                out = C.DATA / f"aeronet_{C.site_slug(st)}.csv"
+                d[["time", "AOD_500nm", ang, "aod550"]].to_csv(out, index=False)
+                print(f"  AERONET {sid}: {len(d)} retrievals -> {out.name}",
+                      file=sys.stderr)
+            except Exception as e:                          # noqa: BLE001
+                print(f"  AERONET {sid} failed: {e!r}", file=sys.stderr)
 
     if "column" in parts:
         # The time-height section needs ONE column, not the whole box. 9 points
@@ -524,6 +569,42 @@ def main() -> None:
                             level=np.array(C.WIND3D_LEVELS), **cube3)
         nn = 100 * np.isfinite(cube3["w"]).mean()
         print(f"  wrote wind3d.npz {shape}, w non-null {nn:.0f}%", file=sys.stderr)
+
+    if "traj3d" in parts:
+        print(f"3D wind over the trajectory box ({C.WIND3D_MODEL_LABEL})...",
+              file=sys.stderr)
+        b, stt = C.TRAJ_BOX, C.TRAJ_STEP
+        lat_t = np.round(np.arange(b["south"], b["north"] + 1e-9, stt), 4)
+        lon_t = np.round(np.arange(b["west"], b["east"] + 1e-9, stt), 4)
+        pts_t = [(float(x), float(y)) for x in lat_t for y in lon_t]
+        vt = [f"{v}_{lv}hPa" for lv in C.TRAJ_LEVELS
+              for v in ("wind_speed", "wind_direction", "vertical_velocity",
+                        "geopotential_height")]
+        print(f"  {len(pts_t)} points x {len(C.TRAJ_LEVELS)} levels "
+              f"({len(vt)} variables)", file=sys.stderr)
+        rec = fetch_points(C.MET_URL, vt, pts_t, C.WIND3D_PAST_DAYS,
+                           a.forecast_days, models=C.WIND3D_MODEL)
+        times = np.array(rec[0]["hourly"]["time"], dtype="datetime64[s]")
+        shape = (len(times), len(C.TRAJ_LEVELS), lat_t.size, lon_t.size)
+        cube = {k: np.full(shape, np.nan, "float32")
+                for k in ("spd", "dir", "w", "z")}
+        key = {"wind_speed": "spd", "wind_direction": "dir",
+               "vertical_velocity": "w", "geopotential_height": "z"}
+        for n, r in enumerate(rec):
+            i, j = divmod(n, lon_t.size)
+            for li, lv in enumerate(C.TRAJ_LEVELS):
+                for var, short in key.items():
+                    ser = r["hourly"].get(f"{var}_{lv}hPa")
+                    if ser is None:
+                        continue
+                    cube[short][:, li, i, j] = [np.nan if x is None else x
+                                                for x in ser]
+        np.savez_compressed(C.DATA / "traj3d.npz", time=times, lat=lat_t,
+                            lon=lon_t, level=np.array(C.TRAJ_LEVELS), **cube)
+        for k in ("spd", "w", "z"):
+            print(f"  {k} non-null {100*np.isfinite(cube[k]).mean():.0f}%",
+                  file=sys.stderr)
+        print(f"  wrote traj3d.npz {shape}", file=sys.stderr)
 
     if "fires" in parts:
         print("VIIRS active fire (FIRMS)...", file=sys.stderr)

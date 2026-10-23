@@ -3,6 +3,7 @@
 The domain is deliberately much larger than Cebu: a transported plume is only
 visible if the upwind fetch (Borneo, Sulawesi, Sumatra) is inside the box.
 """
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -12,6 +13,23 @@ for _d in (DATA, FIGS, FRAMES):
     _d.mkdir(parents=True, exist_ok=True)
 
 CEBU = dict(name="Cebu City", lat=10.32, lon=123.90)
+# Koronadal, South Cotabato: 438 km south of Cebu, i.e. upwind on the
+# southwest-monsoon track, which is why it is worth a second receptor. It is
+# also 0.9 km from the ND Marbel AERONET site (6.496 N, 124.843 E) -- the same
+# CAMS cell at 0.4 deg -- so this series can be checked against measured AOD,
+# which no other point in the domain can. CEBU stays a separate name because
+# the maps, trajectories and bias correction are all anchored to it; only the
+# point time series is multi-site.
+KORONADAL = dict(name="Koronadal City", lat=6.503, lon=124.847,
+                 aeronet="ND_Marbel_Univ")
+# AERONET has no 560 nm channel at this instrument, so AOD is converted
+# from 500 nm with the measured Angstrom exponent:
+#   AOD(550) = AOD(500) * (550/500)^-alpha   -- about 0.89 at alpha 1.2
+AERONET_URL = "https://aeronet.gsfc.nasa.gov/cgi-bin/print_web_data_v3"
+SITES = [CEBU, KORONADAL]
+# slug for the per-site CSV: data/<slug>_timeseries.csv
+def site_slug(s):
+    return s["name"].split()[0].lower()
 TZ_OFFSET_H, TZ_LABEL = 8, "PHT"     # Philippines is UTC+8 all year, no DST
 # west to Sumatra: the Riau/Jambi fires are a second source region, and the
 # domain now reads wider than tall, which fills the figure better
@@ -41,6 +59,23 @@ ELEV_URL = "https://api.open-meteo.com/v1/elevation"
 # corridor, reaching back past the peak. Geopotential height is NOT fetched:
 # it varies by sd ~16 m against level gaps of 700-1650 m, so the observed means
 # below are exact enough and the saving is 25% of the request.
+# --- 3D back-trajectory grid -------------------------------------------------
+# Big enough for a 120 h parcel from Cebu (~1,500 km observed), coarse enough to
+# afford: 46x26 points x 6 levels x 4 variables ~ 2,900 call-equivalents. Run on
+# demand, not nightly. Levels stop at 300 hPa because a lower-tropospheric
+# trajectory never reaches higher, and each extra level costs 4 variables.
+TRAJ_BOX = dict(south=0.0, north=25.0, west=105.0, east=150.0)
+# 1,196 points x 24 variables ~ 2,870 call-equivalents against a 10,000/day
+# limit, so run this on demand and not on a day the grid has already been
+# refetched -- that combination exhausted the quota on 14 Oct.
+TRAJ_STEP = 1.0
+TRAJ_LEVELS = [1000, 925, 850, 700, 500, 300]
+# 1000 not 850: at 850 the parcel sits above the inversion and travels six
+# times further (1,633 km vs 358 km over 120 h on 15 Oct) -- that is air which
+# never reaches the ground. For surface air quality the release has to be inside
+# the boundary layer. Override with --release-hpa for transport questions.
+TRAJ_START_HPA = 1000
+
 WIND3D_FINE = dict(south=5.0, north=15.0, west=118.0, east=128.0)
 WIND3D_FINE_STEP = 0.25
 WIND3D_VARS = ("wind_speed", "wind_direction", "vertical_velocity")
@@ -193,8 +228,10 @@ INK, INK_MUTED, SURFACE = "#1c1917", "#78716c", "#ffffff"
 FIRE, TRAJ, RECEPTOR = "#dc2626", "#0f172a", "#0f172a"
 WIND_KEY = 10             # m/s reference arrow drawn on every map
 TRAIN_FRAC = 0.70         # share of overlapping days used to fit the factors
-TRAJ_HOURS = 72           # completes for ~86% of frames; longer mostly
-                          # measures our domain edge, not the atmosphere
+# 72 was set when the box stopped at 130E and longer runs just measured the
+# boundary; the domain is now 2.2x larger, so this is worth revisiting.
+# Override without editing:  TRAJ_HOURS=120 python src/plot_maps.py ...
+TRAJ_HOURS = int(os.environ.get("TRAJ_HOURS", 72))
 FIRE_ALPHA = 0.55         # fires draw over the raster; keep them from dominating
 
 

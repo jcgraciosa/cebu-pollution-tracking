@@ -45,8 +45,12 @@ if [ "$FORECAST_ONLY" = 0 ]; then
   # forecast figures, so it stales those alone.
   $PY src/download.py --parts aq,fires,met,vis
 fi
-step "receptor series at Cebu"
+step "receptor series at Cebu and Koronadal"
 try $PY src/download.py --parts site
+# Measured AOD for the Koronadal strip. Under `try`: AERONET is a third-party
+# endpoint and the overlay is a bonus, not a reason to lose the run. plot_maps
+# simply omits the points if the CSV is absent.
+try $PY src/download.py --parts aeronet
 
 if [ "$RENDER" = 1 ]; then
   # AOD (column) and CO (conservative tracer) follow a transported plume;
